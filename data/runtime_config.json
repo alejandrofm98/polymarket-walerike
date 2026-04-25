@@ -1,0 +1,13 @@
+{
+  "capital_per_trade": 10.0,
+  "email_loss_alert_pct": 0.0,
+  "enabled_markets": {
+    "BTC": [
+      "5m"
+    ]
+  },
+  "explicit_slugs": [],
+  "min_margin_for_arbitrage": 0.02,
+  "paper_mode": true,
+  "solo_log": false
+}

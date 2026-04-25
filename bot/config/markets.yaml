@@ -1,0 +1,11 @@
+markets:
+  assets:
+    BTC:
+      symbol: BTCUSDT
+      timeframes: [5m, 15m, 1h]
+    ETH:
+      symbol: ETHUSDT
+      timeframes: [5m, 15m, 1h]
+    SOL:
+      symbol: SOLUSDT
+      timeframes: [5m, 15m, 1h]

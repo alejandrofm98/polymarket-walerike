@@ -1,0 +1,269 @@
+"""Signal-only hedge strategy; execution and hard risk checks live elsewhere."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+import time
+
+
+class HedgeMode(StrEnum):
+    ARBITRAGE = "ARBITRAGE"
+    COPYTRADE = "COPYTRADE"
+    HEDGE_BIASED_UP = "HEDGE_BIASED_UP"
+    HEDGE_BIASED_DOWN = "HEDGE_BIASED_DOWN"
+    HEDGE_NEUTRAL = "HEDGE_NEUTRAL"
+
+
+@dataclass(slots=True)
+class HedgeConfig:
+    arbitrage_yes_no_sum: float = 0.98
+    entry_threshold: float = 0.499
+    max_sum_avg: float = 0.98
+    max_buys_per_side: int = 4
+    shares_per_order: float = 5.0
+    reversal_delta: float = 0.02
+    depth_buy_discount_percent: float = 0.05
+    second_side_buffer: float = 0.01
+    second_side_time_threshold_ms: float = 200.0
+    dynamic_threshold_boost: float = 0.04
+    min_liquidity: float = 50.0
+    max_oracle_discrepancy_pct: float = 1.0
+    momentum_threshold_pct: float = 0.25
+    hedge_bias_fraction: float = 0.65
+
+
+@dataclass(slots=True)
+class MarketSnapshot:
+    market_id: str
+    asset: str
+    timeframe: str
+    yes_token_id: str
+    no_token_id: str
+    yes_price: float
+    no_price: float
+    yes_liquidity: float
+    no_liquidity: float
+    spot_price: float
+    oracle_price: float
+    timestamp: float
+    market_slug: str | None = None
+    end_date: str | None = None
+    price_to_beat: float | None = None
+
+
+@dataclass(slots=True)
+class HedgeSignal:
+    mode: HedgeMode
+    yes_size: float
+    no_size: float
+    expected_margin: float
+    reasons: list[str] = field(default_factory=list)
+    target_side: str | None = None
+
+
+@dataclass(slots=True)
+class CopytradeRow:
+    qty_yes: float = 0.0
+    qty_no: float = 0.0
+    cost_yes: float = 0.0
+    cost_no: float = 0.0
+    buy_count_yes: int = 0
+    buy_count_no: int = 0
+    last_buy_side: str | None = None
+
+
+@dataclass(slots=True)
+class TrackingState:
+    tracking_side: str | None = None
+    temp_price: float = 0.0
+    initialized: bool = False
+    first_buy_of_hedge: bool = True
+    second_side_timer_started_at: float | None = None
+
+
+class HedgeStrategy:
+    def __init__(self, config: HedgeConfig | None = None) -> None:
+        self.config = config or HedgeConfig()
+        self._rows: dict[str, CopytradeRow] = {}
+        self._tracking: dict[str, TrackingState] = {}
+
+    def evaluate(self, snapshot: MarketSnapshot, capital_per_trade: float, momentum_pct: float) -> HedgeSignal:
+        return self._evaluate_copytrade(snapshot)
+
+    def record_buy(self, snapshot: MarketSnapshot, side: str, price: float, size: float) -> None:
+        key = self._key(snapshot)
+        row = self._rows.setdefault(key, CopytradeRow())
+        side = side.upper()
+        if side == "YES":
+            row.qty_yes += size
+            row.cost_yes += price * size
+            row.buy_count_yes += 1
+        else:
+            row.qty_no += size
+            row.cost_no += price * size
+            row.buy_count_no += 1
+        row.last_buy_side = side
+
+        tracking = self._tracking.setdefault(key, TrackingState())
+        opposite = "NO" if side == "YES" else "YES"
+        dynamic_threshold = max(0.0, min(1.0, 1.0 - price + self.config.dynamic_threshold_boost))
+        tracking.tracking_side = opposite
+        tracking.temp_price = dynamic_threshold
+        tracking.initialized = True
+        tracking.first_buy_of_hedge = False
+        tracking.second_side_timer_started_at = None
+
+    def state_snapshot(self, snapshot: MarketSnapshot) -> dict[str, float | int | str | None]:
+        key = self._key(snapshot)
+        row = self._rows.get(key, CopytradeRow())
+        tracking = self._tracking.get(key, TrackingState())
+        return {
+            "key": key,
+            "qty_yes": row.qty_yes,
+            "qty_no": row.qty_no,
+            "avg_yes": self._avg(row.cost_yes, row.qty_yes),
+            "avg_no": self._avg(row.cost_no, row.qty_no),
+            "sum_avg": self._avg(row.cost_yes, row.qty_yes) + self._avg(row.cost_no, row.qty_no),
+            "buy_count_yes": row.buy_count_yes,
+            "buy_count_no": row.buy_count_no,
+            "last_buy_side": row.last_buy_side,
+            "tracking_side": tracking.tracking_side,
+            "tracking_price": tracking.temp_price,
+        }
+
+    def _evaluate_copytrade(self, snapshot: MarketSnapshot) -> HedgeSignal:
+        reasons: list[str] = []
+        if snapshot.yes_liquidity < self.config.min_liquidity or snapshot.no_liquidity < self.config.min_liquidity:
+            reasons.append("liquidity below threshold")
+
+        oracle_discrepancy = self._oracle_discrepancy_pct(snapshot.spot_price, snapshot.oracle_price)
+        if oracle_discrepancy > self.config.max_oracle_discrepancy_pct:
+            reasons.append("oracle discrepancy above threshold")
+
+        key = self._key(snapshot)
+        row = self._rows.setdefault(key, CopytradeRow())
+        tracking = self._tracking.setdefault(key, TrackingState())
+        yes_no_sum = snapshot.yes_price + snapshot.no_price
+        expected_margin = max(0.0, self.config.max_sum_avg - yes_no_sum)
+
+        if row.buy_count_yes >= self.config.max_buys_per_side and row.buy_count_no >= self.config.max_buys_per_side:
+            reasons.append("hedge complete")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons)
+
+        if not tracking.initialized or tracking.tracking_side is None:
+            yes_below = snapshot.yes_price <= self.config.entry_threshold
+            no_below = snapshot.no_price <= self.config.entry_threshold
+            if not yes_below and not no_below:
+                reasons.append("waiting for entry threshold")
+                return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons)
+            if row.last_buy_side == "YES" and yes_below:
+                side = "YES"
+            elif row.last_buy_side == "NO" and no_below:
+                side = "NO"
+            elif yes_below:
+                side = "YES"
+            else:
+                side = "NO"
+            tracking.tracking_side = side
+            tracking.temp_price = snapshot.yes_price if side == "YES" else snapshot.no_price
+            tracking.initialized = True
+            tracking.first_buy_of_hedge = True
+            reasons.append(f"tracking {side} below entry threshold")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
+
+        side = tracking.tracking_side
+        price = snapshot.yes_price if side == "YES" else snapshot.no_price
+        liquidity = snapshot.yes_liquidity if side == "YES" else snapshot.no_liquidity
+        buy_count = row.buy_count_yes if side == "YES" else row.buy_count_no
+        if buy_count >= self.config.max_buys_per_side:
+            opposite = "NO" if side == "YES" else "YES"
+            opposite_count = row.buy_count_no if opposite == "NO" else row.buy_count_yes
+            if opposite_count >= self.config.max_buys_per_side:
+                reasons.append("hedge complete")
+                return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons)
+            tracking.tracking_side = opposite
+            tracking.temp_price = snapshot.no_price if opposite == "NO" else snapshot.yes_price
+            tracking.second_side_timer_started_at = None
+            reasons.append(f"{side} max buys reached; switching to {opposite}")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=opposite)
+
+        if not tracking.first_buy_of_hedge and row.last_buy_side == side:
+            opposite = "NO" if side == "YES" else "YES"
+            tracking.tracking_side = opposite
+            tracking.temp_price = snapshot.no_price if opposite == "NO" else snapshot.yes_price
+            tracking.second_side_timer_started_at = None
+            reasons.append(f"strict alternation switching to {opposite}")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=opposite)
+
+        if price < tracking.temp_price:
+            tracking.temp_price = price
+            tracking.second_side_timer_started_at = None
+            reasons.append(f"new low for {side}")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
+
+        other_avg = self._avg(row.cost_no, row.qty_no) if side == "YES" else self._avg(row.cost_yes, row.qty_yes)
+        max_acceptable_price = self.config.max_sum_avg - other_avg
+        projected_sum_avg = self._projected_sum_avg(row, side, price, self.config.shares_per_order)
+        if price > max_acceptable_price or projected_sum_avg > self.config.max_sum_avg:
+            reasons.append(f"sumAvg guard price={price:.4f} max={max_acceptable_price:.4f} projected={projected_sum_avg:.4f}")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
+
+        now_ms = time.time() * 1000.0
+        is_second_side = row.last_buy_side is not None and row.last_buy_side != side
+        time_based = False
+        if is_second_side:
+            if price > tracking.temp_price:
+                tracking.second_side_timer_started_at = None
+            else:
+                if tracking.second_side_timer_started_at is None:
+                    tracking.second_side_timer_started_at = now_ms
+                time_based = now_ms - tracking.second_side_timer_started_at >= self.config.second_side_time_threshold_ms
+
+        deep_discount = price <= tracking.temp_price * (1.0 - self.config.depth_buy_discount_percent)
+        reversal = price > tracking.temp_price + self.config.reversal_delta
+        immediate_second_side = is_second_side and price <= tracking.temp_price - self.config.second_side_buffer
+        if time_based:
+            reasons.append("second side time threshold")
+        elif immediate_second_side:
+            reasons.append("second side dynamic threshold")
+        elif deep_discount:
+            reasons.append("depth discount trigger")
+        elif reversal:
+            reasons.append("reversal trigger")
+        else:
+            reasons.append("waiting for trigger")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
+
+        size = min(self.config.shares_per_order, liquidity)
+        yes_size = size if side == "YES" else 0.0
+        no_size = size if side == "NO" else 0.0
+        return HedgeSignal(HedgeMode.COPYTRADE, yes_size, no_size, expected_margin, reasons, target_side=side)
+
+    @staticmethod
+    def _key(snapshot: MarketSnapshot) -> str:
+        return snapshot.market_slug or snapshot.market_id
+
+    @staticmethod
+    def _avg(cost: float, qty: float) -> float:
+        return cost / qty if qty > 0 else 0.0
+
+    @classmethod
+    def _projected_sum_avg(cls, row: CopytradeRow, side: str, price: float, size: float) -> float:
+        yes_cost = row.cost_yes + (price * size if side == "YES" else 0.0)
+        yes_qty = row.qty_yes + (size if side == "YES" else 0.0)
+        no_cost = row.cost_no + (price * size if side == "NO" else 0.0)
+        no_qty = row.qty_no + (size if side == "NO" else 0.0)
+        return cls._avg(yes_cost, yes_qty) + cls._avg(no_cost, no_qty)
+
+    @staticmethod
+    def _size_for(capital: float, price: float, liquidity: float) -> float:
+        if capital <= 0 or price <= 0:
+            return 0.0
+        return min(capital / price, liquidity)
+
+    @staticmethod
+    def _oracle_discrepancy_pct(spot_price: float, oracle_price: float) -> float:
+        if oracle_price <= 0:
+            return 0.0
+        return abs(spot_price - oracle_price) / oracle_price * 100.0

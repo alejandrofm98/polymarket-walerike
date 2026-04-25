@@ -1,0 +1,11 @@
+services:
+  walerike:
+    build: .
+    command: python main.py --paper --host 0.0.0.0 --port 8000
+    environment:
+      PAPER_MODE: "true"
+      DATABASE_PATH: /app/data/trades.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data

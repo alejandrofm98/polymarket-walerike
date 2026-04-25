@@ -1,0 +1,70 @@
+# Polymarket Walerike
+
+Paper-first Polymarket crypto hedge bot with FastAPI dashboard controls.
+
+## Quickstart
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cd frontend && npm install && npm run build && cd ..
+cp .env.example .env
+python3 main.py --paper
+```
+
+Dashboard: http://127.0.0.1:8000
+
+Default mode is paper trading. Dashboard controls start, pause, stop, and solo-log mode; running `main.py` does not auto-trade.
+
+Market reads use Polymarket Gamma API (`POLYMARKET_GAMMA_API_URL`, default `https://gamma-api.polymarket.com`) and public CLOB book endpoints (`POLYMARKET_HOST`, default `https://clob.polymarket.com`) in paper mode. Live CLOB order placement remains blocked unless live trading is explicitly enabled.
+
+The dashboard Config panel selects BTC/ETH/SOL markets by timeframe (`5m`, `15m`, `1h`) and accepts explicit event or market slugs such as `btc-updown-5m-1777069800` or a full Polymarket event URL. `/api/markets` deterministically resolves current 5m/15m slugs, uses hourly Gamma series slugs for 1h markets, and enriches UP/DOWN prices from REST CLOB books.
+
+Run tests:
+
+```bash
+python3 -m pytest -q
+```
+
+Frontend development:
+
+```bash
+python3 main.py --paper
+cd frontend
+npm install
+npm run dev
+```
+
+Vite serves the React dashboard at http://127.0.0.1:5173 and proxies `/api` plus `/ws` to FastAPI on port 8000. Production/static serving uses `frontend/dist` when present.
+
+Build and run with Docker:
+
+```bash
+docker build -t polymarket-walerike .
+docker run --rm -p 8000:8000 -v "$PWD/data:/app/data" polymarket-walerike
+```
+
+Or:
+
+```bash
+docker compose up --build
+```
+
+Live trading is blocked unless both `--live`/`paper=False` and `POLYMARKET_LIVE_TRADING=1` are set. Do not put real private keys in source control. Positions use Polymarket Data API at `/positions?user=<proxy_wallet>` because `py-clob-client` has no positions method.
+
+## Module Status
+
+- `bot/core/polymarket_client.py`: paper-safe CLOB wrapper, public Gamma reads, public REST book reads, and websocket payload helpers.
+- `bot/core/binance_feed.py`: async Binance ticker feed for BTC/ETH/SOL with testable parse/update and momentum helpers.
+- `bot/core/chainlink_oracle.py`: lazy Chainlink reader with manual cache; `web3` only required for live oracle reads.
+- `bot/core/risk_manager.py`: pure pre-trade risk checks and size adjustment.
+- `bot/core/hedge_strategy.py`: signal generation only; no order execution.
+- `bot/runtime/bot_engine.py`: async paper/live lifecycle runner behind API controls.
+- `bot/web/api_routes.py`: dashboard API controls and Gamma market scan endpoints wired to `BotEngine` when present.
+
+Next verification command:
+
+```bash
+cd frontend && npm run build && cd .. && python3 -m compileall main.py bot tests && python3 -m pytest -q
+```

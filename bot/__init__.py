@@ -1,0 +1,1 @@
+"""Polymarket hedge bot package."""
