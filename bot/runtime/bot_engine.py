@@ -647,10 +647,8 @@ class BotEngine:
             self.solo_log = bool(config.solo_log)
             if hasattr(self.scanner, "set_enabled_markets"):
                 self.scanner.set_enabled_markets(config.enabled_markets)
-            if hasattr(self.scanner, "set_explicit_slugs"):
-                self.scanner.set_explicit_slugs(config.explicit_slugs)
             elif hasattr(self.scanner, "configure"):
-                self.scanner.configure(enabled_markets=config.enabled_markets, explicit_slugs=config.explicit_slugs)
+                self.scanner.configure(enabled_markets=config.enabled_markets)
             if hasattr(self.strategy, "config"):
                 self.strategy.config.arbitrage_yes_no_sum = 1.0 - float(config.min_margin_for_arbitrage)
                 self.strategy.config.entry_threshold = float(config.entry_threshold)

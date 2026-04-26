@@ -114,7 +114,7 @@ def test_book_normalization_and_mirror_math() -> None:
 
 
 def test_scan_gamma_uses_enabled_pairs_and_dedupes() -> None:
-    scanner = MarketScanner(FakeGammaClient(), enabled_markets={"BTC": ["5m"]}, explicit_slugs=["btc-updown-5m-1777069800"])
+    scanner = MarketScanner(FakeGammaClient(), enabled_markets={"BTC": ["5m"]})
 
     result = asyncio.run(scanner.scan())
 

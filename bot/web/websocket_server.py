@@ -17,7 +17,7 @@ class DashboardEvent:
 
 
 class WebSocketBroadcaster:
-    def __init__(self, buffer_size: int = 100) -> None:
+    def __init__(self, buffer_size: int = 10) -> None:
         self.active: set[Any] = set()
         self.recent: Deque[dict[str, Any]] = deque(maxlen=buffer_size)
         self._market_tick_recent: Deque[dict[str, Any]] = deque(maxlen=3)
@@ -26,6 +26,8 @@ class WebSocketBroadcaster:
         await websocket.accept()
         self.active.add(websocket)
         for event in self.recent:
+            if event.get("type") == "market_tick":
+                continue
             await websocket.send_json(event)
 
     def disconnect(self, websocket: Any) -> None:

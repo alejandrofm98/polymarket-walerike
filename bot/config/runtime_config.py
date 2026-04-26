@@ -27,7 +27,6 @@ class RuntimeConfig:
     second_side_time_threshold_ms: float = 200.0
     dynamic_threshold_boost: float = 0.04
     enabled_markets: dict[str, list[str]] | list[str] | None = None
-    explicit_slugs: list[str] | None = None
     email_loss_alert_pct: float = 0.0
     solo_log: bool = False
     paper_mode: bool = True
@@ -35,8 +34,6 @@ class RuntimeConfig:
     def __post_init__(self) -> None:
         if self.enabled_markets is None:
             self.enabled_markets = {asset: list(DEFAULT_TIMEFRAMES) for asset in DEFAULT_ASSETS}
-        if self.explicit_slugs is None:
-            self.explicit_slugs = []
 
 
 class RuntimeConfigStore:
@@ -83,9 +80,6 @@ def validate_runtime_config(config: RuntimeConfig) -> None:
     config.solo_log = bool(config.solo_log)
     config.paper_mode = bool(config.paper_mode)
     config.enabled_markets = normalize_enabled_markets(config.enabled_markets)
-    if not isinstance(config.explicit_slugs, list) or not all(isinstance(item, str) for item in config.explicit_slugs):
-        raise ValueError("explicit_slugs must be a list of strings")
-    config.explicit_slugs = [_slug(item) for item in config.explicit_slugs if _slug(item)]
 
 
 def normalize_enabled_markets(value: Any) -> dict[str, list[str]]:

@@ -125,6 +125,22 @@ def test_api_clears_open_paper_trades(tmp_path) -> None:  # type: ignore[no-unty
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_clears_all_trade_history(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    trade_logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
+    trade_logger.log_trade_opened(TradeRecord(trade_id="paper", market="m1", asset="BTC", side="YES", entry_price=0.4, size=10, metadata={"paper": True}))
+    trade_logger.log_trade_opened(TradeRecord(trade_id="live", market="m1", asset="BTC", side="NO", entry_price=0.3, size=7, metadata={"paper": False}))
+    app = create_app(Settings(paper_mode=True, live_trading=False), {"trade_logger": trade_logger})
+
+    with TestClient(app) as client:
+        response = client.post("/api/trades/clear").json()
+
+    assert response["ok"] is True
+    assert response["cleared"] == 2
+    assert response["positions"] == []
+    assert trade_logger.list_trades() == []
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_markets_scans_and_fetches_slug() -> None:
     app = create_app(
         Settings(paper_mode=True, live_trading=False),

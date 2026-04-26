@@ -216,6 +216,38 @@ class MarketCandidate:
             "price_diff_pct": round((self.current_price - self.price_to_beat) / self.price_to_beat * 100, 2) if self.current_price is not None and self.price_to_beat and self.price_to_beat != 0 else None,
         }
 
+    def to_tick_dict(self) -> dict[str, Any]:
+        """Lightweight dict for realtime tick events - excludes heavy order book arrays."""
+        return {
+            "market_id": self.market_id,
+            "question": self.question,
+            "asset": self.asset,
+            "timeframe": self.timeframe,
+            "slug": self.slug or self.market_slug or self.event_slug,
+            "condition_id": self.condition_id,
+            "event_slug": self.event_slug,
+            "accepting_orders": self.accepting_orders,
+            "closed": self.closed,
+            "up_token_id": self.up_token_id,
+            "down_token_id": self.down_token_id,
+            "best_bid_up": self.best_bid_up,
+            "best_ask_up": self.best_ask_up,
+            "best_bid_down": self.best_bid_down,
+            "best_ask_down": self.best_ask_down,
+            "spread": self.spread,
+            "liquidity": self.liquidity,
+            "current_price": self.current_price,
+            "current_price_source": self.current_price_source,
+            "price_to_beat": self.price_to_beat,
+            "window_start_timestamp": self.window_start_timestamp,
+            "target_price_source": self.target_price_source,
+            "edge": self.edge,
+            "net_edge": self.net_edge,
+            "seconds_left": self.seconds_left,
+            "price_diff": round(self.current_price - self.price_to_beat, 2) if self.current_price is not None and self.price_to_beat is not None else None,
+            "price_diff_pct": round((self.current_price - self.price_to_beat) / self.price_to_beat * 100, 2) if self.current_price is not None and self.price_to_beat and self.price_to_beat != 0 else None,
+        }
+
 
 class MarketScanner:
     def __init__(
@@ -224,26 +256,16 @@ class MarketScanner:
         assets: tuple[str, ...] = ("BTC", "ETH", "SOL"),
         timeframes: tuple[str, ...] = ("5m", "15m", "1h"),
         enabled_markets: dict[str, list[str]] | None = None,
-        explicit_slugs: list[str] | None = None,
     ) -> None:
         self.client = client
         self.assets = tuple(asset.upper() for asset in assets)
         self.timeframes = tuple(timeframe.lower() for timeframe in timeframes)
         self.enabled_markets = enabled_markets or {asset: list(self.timeframes) for asset in self.assets}
-        self.explicit_slugs = explicit_slugs or []
         self._first_price_for_slug: dict[str, float] = {}  # Track first binance price per slug
 
-    def configure(self, *, enabled_markets: dict[str, list[str]] | None = None, explicit_slugs: list[str] | None = None) -> None:
+    def configure(self, *, enabled_markets: dict[str, list[str]] | None = None) -> None:
         if enabled_markets is not None:
             self.set_enabled_markets(enabled_markets)
-        if explicit_slugs is not None:
-            self.set_explicit_slugs(explicit_slugs)
-
-    def set_enabled_markets(self, enabled_dict: dict[str, list[str]]) -> None:
-        self.enabled_markets = {asset.upper(): [tf.lower() for tf in timeframes] for asset, timeframes in enabled_dict.items()}
-
-    def set_explicit_slugs(self, slugs: list[str]) -> None:
-        self.explicit_slugs = [slug.strip().rstrip("/").split("/")[-1] for slug in slugs if slug.strip()]
 
     async def scan(self) -> list[MarketCandidate]:
         if any(hasattr(self.client, name) for name in ("fetch_market_by_slug", "fetch_event_by_slug", "fetch_events")):
@@ -259,8 +281,6 @@ class MarketScanner:
         candidates: list[MarketCandidate] = []
         seen: set[str] = set()
         now_ts = time.time()
-        for slug in self.explicit_slugs:
-            self._append_candidate(candidates, seen, await self._fetch_explicit_slug(slug))
         for asset, timeframes in self.enabled_markets.items():
             for timeframe in timeframes:
                 if timeframe in {"5m", "15m"} and hasattr(self.client, "fetch_market_by_slug"):
@@ -325,23 +345,12 @@ class MarketScanner:
         timeframe = self._timeframe(text)
         if asset is None or timeframe is None:
             return None
-        explicit = event_slug in self.explicit_slugs or market_slug in self.explicit_slugs
-        if asset not in self.enabled_markets and not explicit:
+        if asset not in self.enabled_markets:
             return None
-        if not explicit and timeframe not in self.enabled_markets.get(asset, []):
+        if timeframe not in self.enabled_markets.get(asset, []):
             return None
         tokens = self._gamma_tokens(market)
         return self._candidate_from_market(market, event, asset, timeframe, tokens)
-
-    async def _fetch_explicit_slug(self, slug: str) -> MarketCandidate | None:
-        if hasattr(self.client, "fetch_market_by_slug"):
-            candidate = await self._fetch_market_slug(slug, strict=False)
-            if candidate is not None:
-                return candidate
-        if hasattr(self.client, "fetch_event_by_slug"):
-            with contextlib.suppress(Exception):
-                return self.parse_gamma_event(await self.client.fetch_event_by_slug(slug))
-        return None
 
     async def _fetch_market_slug(self, slug: str, *, strict: bool = True) -> MarketCandidate | None:
         try:

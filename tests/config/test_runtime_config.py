@@ -13,7 +13,6 @@ def test_runtime_config_persists_valid_updates(tmp_path) -> None:  # type: ignor
             "capital_per_trade": "25",
             "min_margin_for_arbitrage": 0.05,
             "enabled_markets": {"btc": ["5M", "1h"], "ETH": ["15m"]},
-            "explicit_slugs": ["https://polymarket.com/es/event/btc-updown-5m-1777069800"],
             "email_loss_alert_pct": 10,
             "solo_log": True,
         }
@@ -22,7 +21,6 @@ def test_runtime_config_persists_valid_updates(tmp_path) -> None:  # type: ignor
     assert config.capital_per_trade == 25.0
     assert config.min_margin_for_arbitrage == 0.05
     assert config.enabled_markets == {"BTC": ["5m", "1h"], "ETH": ["15m"]}
-    assert config.explicit_slugs == ["btc-updown-5m-1777069800"]
     assert store.load().solo_log is True
 
 

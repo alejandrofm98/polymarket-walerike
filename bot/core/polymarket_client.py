@@ -31,6 +31,8 @@ except ImportError:  # pragma: no cover - keeps paper/tests usable before deps i
 
     logger = _FallbackLogger()
 
+POLYMARKET_WEB_URL = "https://polymarket.com"
+
 from bot.config.settings import Settings
 
 try:
@@ -184,6 +186,42 @@ class PolymarketClient:
             logger.warning("POLYMARKET_PROXY_WALLET or POLYMARKET_FUNDER required for positions Data API")
             return []
         return await self._call_sync(self._fetch_positions, proxy_wallet)
+
+    async def fetch_page_html(self, path_or_slug: str) -> str | None:
+        """Fetch HTML page content for a Polymarket event/market slug."""
+        clean_slug = path_or_slug.strip().rstrip("/").split("/")[-1]
+        if not clean_slug:
+            return None
+        url = f"{POLYMARKET_WEB_URL}/event/{urllib.parse.quote(clean_slug)}"
+        try:
+            result = await self._call_sync(self._fetch_text_url, url)
+            return result
+        except Exception as exc:
+            logger.warning("Failed to fetch page HTML for {}: {}", clean_slug, exc)
+            return None
+
+    async def fetch_crypto_price(self, symbol: str, event_start_time: str, variant: str, end_date: str) -> dict[str, Any]:
+        query = urllib.parse.urlencode({
+            "symbol": symbol.upper(),
+            "eventStartTime": event_start_time,
+            "variant": variant,
+            "endDate": end_date,
+        })
+        url = f"{POLYMARKET_WEB_URL}/api/crypto/crypto-price?{query}"
+        return await self._call_sync(self._fetch_json_url, url)
+
+    async def fetch_past_results(self, symbol: str, current_event_start_time: str, end_date: str, count: int = 4) -> dict[str, Any]:
+        query = urllib.parse.urlencode({
+            "symbol": symbol.upper(),
+            "variant": "hourly",
+            "assetType": "crypto",
+            "currentEventStartTime": current_event_start_time,
+            "count": count,
+            "endDate": end_date,
+            "includeOutcomesBySlug": "true",
+        })
+        url = f"{POLYMARKET_WEB_URL}/api/past-results?{query}"
+        return await self._call_sync(self._fetch_json_url, url)
 
     async def place_order(self, request: OrderRequest) -> OrderResponse:
         self._validate_order(request)
@@ -354,6 +392,17 @@ class PolymarketClient:
                 return self._json_loads(response.read())
         except Exception as exc:  # noqa: BLE001 - expose public data read failures clearly
             raise RuntimeError(f"Polymarket Gamma request failed for {url}: {exc}") from exc
+
+    def _fetch_text_url(self, url: str) -> str:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": "Mozilla/5.0 (compatible; polymarket-walerike/0.1)",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - public Polymarket pages
+            return response.read().decode("utf-8", errors="replace")
 
     def _post_json_url(self, url: str, payload: Any) -> Any:
         try:

@@ -36,6 +36,10 @@ class PositionRecord:
     size: float
     avg_price: float
     unrealized_pnl: float = 0.0
+    timeframe: str | None = None
+    market_slug: str | None = None
+    end_date: str | None = None
+    window_start_timestamp: int | None = None
 
 
 class TradeLogger:
@@ -107,6 +111,11 @@ class TradeLogger:
                 cancelled.append(closed)
         return cancelled
 
+    def clear_trades(self) -> int:
+        count = len(self.list_trades(limit=None))
+        self._execute("DELETE FROM trades", {})
+        return count
+
     def resolve_market(
         self,
         market: str,
@@ -144,12 +153,21 @@ class TradeLogger:
         return [self._record(row) for row in self._query(sql, params)]
 
     def list_positions(self) -> list[PositionRecord]:
-        grouped: dict[tuple[str, str, str], dict[str, float]] = {}
+        grouped: dict[tuple[str, str, str], dict[str, float | str | None]] = {}
         for trade in self.list_trades(status="OPEN"):
             key = (trade.market, trade.asset, trade.side)
-            item = grouped.setdefault(key, {"size": 0.0, "cost": 0.0})
+            item = grouped.setdefault(key, {"size": 0.0, "cost": 0.0, "timeframe": None, "market_slug": None, "end_date": None, "window_start_timestamp": None})
             item["size"] += float(trade.size)
             item["cost"] += float(trade.entry_price) * float(trade.size)
+            if trade.metadata:
+                if item["timeframe"] is None:
+                    item["timeframe"] = trade.metadata.get("timeframe")
+                if item["market_slug"] is None:
+                    item["market_slug"] = trade.metadata.get("market_slug")
+                if item["end_date"] is None:
+                    item["end_date"] = trade.metadata.get("end_date")
+                if item["window_start_timestamp"] is None and trade.metadata.get("window_start_timestamp"):
+                    item["window_start_timestamp"] = trade.metadata.get("window_start_timestamp")
 
         positions: list[PositionRecord] = []
         for (market, asset, side), item in grouped.items():
@@ -163,6 +181,10 @@ class TradeLogger:
                     side=side,
                     size=size,
                     avg_price=item["cost"] / size,
+                    timeframe=item.get("timeframe"),
+                    market_slug=item.get("market_slug"),
+                    end_date=item.get("end_date"),
+                    window_start_timestamp=item.get("window_start_timestamp"),
                 )
             )
         return positions

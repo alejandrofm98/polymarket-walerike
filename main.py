@@ -33,6 +33,17 @@ def create_price_feed(settings: Settings) -> Any:
         return BinanceTickerFeed()
 
 
+def create_target_price_feed(price_feed: Any) -> Any:
+    """Create a historical lookup feed for window-start targets.
+    
+    Returns None when using PolymarketRTDSFeed since Binance historical
+    prices are not a good proxy for Polymarket's window-start price.
+    """
+    if isinstance(price_feed, BinanceTickerFeed):
+        return price_feed
+    return None
+
+
 def build_services(settings: Settings) -> dict[str, Any]:
     runtime_config_store = RuntimeConfigStore()
     runtime_config = runtime_config_store.load()
@@ -40,6 +51,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
     trade_logger = TradeLogger(settings.database_path)
     broadcaster = WebSocketBroadcaster()
     price_feed = create_price_feed(settings)
+    target_price_feed = create_target_price_feed(price_feed)
     oracle = ChainlinkOracle(settings=settings)
     scanner = MarketScanner(client, settings.market_assets, settings.market_timeframes)
     engine = BotEngine(
@@ -63,6 +75,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
         "runtime_config": runtime_config,
         "broadcaster": broadcaster,
         "price_feed": price_feed,
+        "target_price_feed": target_price_feed,
         "oracle": oracle,
         "market_scanner": scanner,
         "bot_engine": engine,

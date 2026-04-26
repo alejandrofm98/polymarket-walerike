@@ -215,6 +215,21 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
                 await engine._publish("bot_status", engine.status())
         return {"ok": True, "cleared": len(cancelled), "trades": [asdict(record) for record in cancelled], "positions": positions}
 
+    @router.post("/trades/clear")
+    async def clear_trades() -> dict[str, Any]:
+        if trade_logger is None or not hasattr(trade_logger, "clear_trades"):
+            return {"ok": False, "cleared": 0, "positions": [], "error": "trade logger unavailable"}
+
+        cleared = trade_logger.clear_trades()
+        positions = []
+        if hasattr(trade_logger, "list_positions"):
+            positions = [asdict(record) for record in trade_logger.list_positions()]
+        if engine is not None and hasattr(engine, "_publish"):
+            await engine._publish("positions", {"positions": positions})
+            if hasattr(engine, "status"):
+                await engine._publish("bot_status", engine.status())
+        return {"ok": True, "cleared": cleared, "positions": positions}
+
     @router.post("/bot/{action}")
     async def control_bot(action: str) -> dict[str, Any]:
         if engine is not None:

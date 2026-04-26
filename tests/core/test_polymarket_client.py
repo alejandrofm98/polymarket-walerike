@@ -162,6 +162,66 @@ def test_gamma_fetch_builds_public_urls_in_paper_mode(monkeypatch) -> None:  # t
     asyncio.run(run())
 
 
+def test_crypto_price_fetch_builds_polymarket_web_api_url(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        seen_urls: list[str] = []
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"openPrice": 78030.02999197552}).encode()
+
+        def fake_urlopen(url: object, timeout: int) -> FakeResponse:
+            seen_urls.append(str(getattr(url, "full_url", url)))
+            assert timeout == 15
+            return FakeResponse()
+
+        monkeypatch.setattr(polymarket_client_module.urllib.request, "urlopen", fake_urlopen)
+        client = PolymarketClient(settings=Settings(paper_mode=True), paper_mode=True)
+
+        assert await client.fetch_crypto_price("btc", "2026-04-26T17:15:00Z", "fiveminute", "2026-04-26T17:20:00Z") == {"openPrice": 78030.02999197552}
+        assert seen_urls == [
+            "https://polymarket.com/api/crypto/crypto-price?symbol=BTC&eventStartTime=2026-04-26T17%3A15%3A00Z&variant=fiveminute&endDate=2026-04-26T17%3A20%3A00Z"
+        ]
+
+    asyncio.run(run())
+
+
+def test_past_results_fetch_builds_polymarket_web_api_url(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        seen_urls: list[str] = []
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"data": {"results": [{"closePrice": 77919.43}]}}).encode()
+
+        def fake_urlopen(url: object, timeout: int) -> FakeResponse:
+            seen_urls.append(str(getattr(url, "full_url", url)))
+            assert timeout == 15
+            return FakeResponse()
+
+        monkeypatch.setattr(polymarket_client_module.urllib.request, "urlopen", fake_urlopen)
+        client = PolymarketClient(settings=Settings(paper_mode=True), paper_mode=True)
+
+        assert await client.fetch_past_results("btc", "2026-04-26T17:00:00Z", "2026-04-26T18:00:00Z") == {"data": {"results": [{"closePrice": 77919.43}]}}
+        assert seen_urls == [
+            "https://polymarket.com/api/past-results?symbol=BTC&variant=hourly&assetType=crypto&currentEventStartTime=2026-04-26T17%3A00%3A00Z&count=4&endDate=2026-04-26T18%3A00%3A00Z&includeOutcomesBySlug=true"
+        ]
+
+    asyncio.run(run())
+
+
 def test_clob_book_fetches_public_urls_in_paper_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     async def run() -> None:
         seen: list[tuple[str, str | None, object]] = []

@@ -82,3 +82,16 @@ def test_trade_logger_cancels_only_open_paper_trades(tmp_path) -> None:  # type:
     assert paper is not None and paper.status == "CANCELLED" and paper.exit_price == 0.4 and paper.pnl == 0.0
     assert live is not None and live.status == "OPEN"
     assert closed is not None and closed.status == "CLOSED"
+
+
+def test_trade_logger_clears_all_trades(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
+    logger.log_trade_opened(TradeRecord(trade_id="open", market="m1", asset="BTC", side="YES", entry_price=0.4, size=10))
+    logger.log_trade_opened(TradeRecord(trade_id="closed", market="m1", asset="BTC", side="NO", entry_price=0.3, size=7))
+    logger.log_trade_closed("closed", exit_price=0.5)
+
+    cleared = logger.clear_trades()
+
+    assert cleared == 2
+    assert logger.list_trades() == []
+    assert logger.list_positions() == []

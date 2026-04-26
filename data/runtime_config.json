@@ -1,13 +1,22 @@
 {
   "capital_per_trade": 10.0,
+  "depth_buy_discount_percent": 0.05,
+  "dynamic_threshold_boost": 0.04,
   "email_loss_alert_pct": 0.0,
   "enabled_markets": {
     "BTC": [
-      "5m"
+      "5m",
+      "15m"
     ]
   },
-  "explicit_slugs": [],
+  "entry_threshold": 0.499,
+  "max_buys_per_side": 4,
+  "max_sum_avg": 0.98,
   "min_margin_for_arbitrage": 0.02,
   "paper_mode": true,
+  "reversal_delta": 0.02,
+  "second_side_buffer": 0.01,
+  "second_side_time_threshold_ms": 200.0,
+  "shares_per_order": 5.0,
   "solo_log": false
 }
