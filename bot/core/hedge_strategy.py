@@ -31,6 +31,7 @@ class HedgeConfig:
     max_oracle_discrepancy_pct: float = 1.0
     momentum_threshold_pct: float = 0.25
     hedge_bias_fraction: float = 0.65
+    taker_fee_rate: float = 0.072
 
 
 @dataclass(slots=True)
@@ -95,13 +96,14 @@ class HedgeStrategy:
         key = self._key(snapshot)
         row = self._rows.setdefault(key, CopytradeRow())
         side = side.upper()
+        effective_price = price + self.fee_per_share(price, self.config.taker_fee_rate)
         if side == "YES":
             row.qty_yes += size
-            row.cost_yes += price * size
+            row.cost_yes += effective_price * size
             row.buy_count_yes += 1
         else:
             row.qty_no += size
-            row.cost_no += price * size
+            row.cost_no += effective_price * size
             row.buy_count_no += 1
         row.last_buy_side = side
 
@@ -125,6 +127,7 @@ class HedgeStrategy:
             "avg_yes": self._avg(row.cost_yes, row.qty_yes),
             "avg_no": self._avg(row.cost_no, row.qty_no),
             "sum_avg": self._avg(row.cost_yes, row.qty_yes) + self._avg(row.cost_no, row.qty_no),
+            "net_sum_avg": self._avg(row.cost_yes, row.qty_yes) + self._avg(row.cost_no, row.qty_no),
             "buy_count_yes": row.buy_count_yes,
             "buy_count_no": row.buy_count_no,
             "last_buy_side": row.last_buy_side,
@@ -144,7 +147,12 @@ class HedgeStrategy:
         key = self._key(snapshot)
         row = self._rows.setdefault(key, CopytradeRow())
         tracking = self._tracking.setdefault(key, TrackingState())
-        yes_no_sum = snapshot.yes_price + snapshot.no_price
+        yes_no_sum = (
+            snapshot.yes_price
+            + self.fee_per_share(snapshot.yes_price, self.config.taker_fee_rate)
+            + snapshot.no_price
+            + self.fee_per_share(snapshot.no_price, self.config.taker_fee_rate)
+        )
         expected_margin = max(0.0, self.config.max_sum_avg - yes_no_sum)
 
         if row.buy_count_yes >= self.config.max_buys_per_side and row.buy_count_no >= self.config.max_buys_per_side:
@@ -202,11 +210,12 @@ class HedgeStrategy:
             reasons.append(f"new low for {side}")
             return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
 
+        effective_price = price + self.fee_per_share(price, self.config.taker_fee_rate)
         other_avg = self._avg(row.cost_no, row.qty_no) if side == "YES" else self._avg(row.cost_yes, row.qty_yes)
         max_acceptable_price = self.config.max_sum_avg - other_avg
-        projected_sum_avg = self._projected_sum_avg(row, side, price, self.config.shares_per_order)
-        if price > max_acceptable_price or projected_sum_avg > self.config.max_sum_avg:
-            reasons.append(f"sumAvg guard price={price:.4f} max={max_acceptable_price:.4f} projected={projected_sum_avg:.4f}")
+        projected_sum_avg = self._projected_sum_avg(row, side, effective_price, self.config.shares_per_order)
+        if effective_price > max_acceptable_price or projected_sum_avg > self.config.max_sum_avg:
+            reasons.append(f"sumAvg guard price={effective_price:.4f} max={max_acceptable_price:.4f} projected={projected_sum_avg:.4f} includes_fee")
             return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
 
         now_ms = time.time() * 1000.0
@@ -261,6 +270,10 @@ class HedgeStrategy:
         if capital <= 0 or price <= 0:
             return 0.0
         return min(capital / price, liquidity)
+
+    @staticmethod
+    def fee_per_share(price: float, fee_rate: float = 0.072) -> float:
+        return max(0.0, fee_rate * price * (1.0 - price))
 
     @staticmethod
     def _oracle_discrepancy_pct(spot_price: float, oracle_price: float) -> float:

@@ -318,6 +318,8 @@ class BotEngine:
         self.account.total_exposure += price * size
         self.account.positions_by_market[snapshot.market_id] = self.account.positions_by_market.get(snapshot.market_id, 0.0) + size
         if self.trade_logger is not None and hasattr(self.trade_logger, "log_trade_opened"):
+            fee_rate = float(getattr(getattr(self.strategy, "config", None), "taker_fee_rate", 0.072))
+            fee_paid = self.strategy.fee_per_share(price, fee_rate) * size if hasattr(self.strategy, "fee_per_share") else 0.0
             self.trade_logger.log_trade_opened(
                 TradeRecord(
                     trade_id=order.order_id,
@@ -334,6 +336,8 @@ class BotEngine:
                         "end_date": snapshot.end_date,
                         "price_to_beat": snapshot.price_to_beat,
                         "opened_spot_price": snapshot.spot_price,
+                        "fee_rate": fee_rate,
+                        "fee_paid": fee_paid,
                     },
                 )
             )

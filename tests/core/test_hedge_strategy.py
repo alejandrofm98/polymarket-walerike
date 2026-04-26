@@ -49,3 +49,15 @@ def test_copytrade_reports_soft_checks_without_momentum_hedge() -> None:
     assert "tracking NO below entry threshold" in signal.reasons
     assert "liquidity below threshold" in signal.reasons
     assert "oracle discrepancy above threshold" in signal.reasons
+
+
+def test_copytrade_sum_avg_guard_includes_crypto_taker_fees() -> None:
+    strategy = HedgeStrategy()
+    snapshot = _snapshot(yes_price=0.56, no_price=0.49)
+    strategy.record_buy(snapshot, "NO", 0.49, 5.0)
+
+    signal = strategy.evaluate(snapshot, capital_per_trade=100.0, momentum_pct=0.0)
+
+    assert signal.yes_size == 0.0
+    assert signal.no_size == 0.0
+    assert any("includes_fee" in reason for reason in signal.reasons)

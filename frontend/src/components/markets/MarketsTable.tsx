@@ -30,7 +30,7 @@ export const MarketsTable = memo(function MarketsTable({ markets }: MarketsTable
               {" / "}
               <span className="text-red-400">NO</span>
             </Th>
-            <Th>Edge</Th>
+            <Th>Net Edge</Th>
             <Th>Left</Th>
             <Th>Status</Th>
           </tr>
@@ -41,7 +41,7 @@ export const MarketsTable = memo(function MarketsTable({ markets }: MarketsTable
             const diff = market.price_diff;
             const diffPct = market.price_diff_pct;
             const isAccepting = market.accepting_orders !== false && market.closed !== true;
-            const edge = Number(market.edge);
+            const edge = Number(market.net_edge ?? market.edge);
             const upAsk = Number(market.best_ask_up ?? 0);
             const downAsk = Number(market.best_ask_down ?? 0);
             const total = upAsk + downAsk;

@@ -111,6 +111,8 @@ def test_book_normalization_and_mirror_math() -> None:
     assert candidate.best_ask_down == 0.45
     assert candidate.best_bid_down == 0.42
     assert candidate.spread == 0.03
+    assert candidate.edge == -0.03
+    assert candidate.net_edge == -0.0654
 
 
 def test_scan_gamma_uses_enabled_pairs_and_dedupes() -> None:
@@ -126,8 +128,8 @@ def gamma_event(slug: str) -> dict[str, object]:
     return {
         "slug": slug,
         "title": "Bitcoin Up or Down - April 2026, 5 minutes",
-        "startTime": "2026-04-24T10:00:00Z",
-        "endDate": "2026-04-24T10:05:00Z",
+        "startTime": "2099-04-24T10:00:00Z",
+        "endDate": "2099-04-24T10:05:00Z",
         "seriesSlug": "btc-updown-5m",
         "tags": [{"slug": "crypto"}, {"label": "5m"}],
         "markets": [

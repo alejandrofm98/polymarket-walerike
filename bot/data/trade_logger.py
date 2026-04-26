@@ -130,7 +130,9 @@ class TradeLogger:
             if trade.market != market:
                 continue
             exit_price = 1.0 if trade.side.upper() == winner else 0.0
-            pnl = round((exit_price - float(trade.entry_price)) * float(trade.size), 10)
+            metadata = trade.metadata or {}
+            fee_paid = float(metadata.get("fee_paid") or 0.0)
+            pnl = round((exit_price - float(trade.entry_price)) * float(trade.size) - fee_paid, 10)
             closed = self.log_trade_closed(trade.trade_id, exit_price=exit_price, status="RESOLVED", pnl=pnl)
             if closed is not None:
                 resolved.append(closed)

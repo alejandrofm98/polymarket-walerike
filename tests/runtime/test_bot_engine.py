@@ -275,6 +275,26 @@ def test_bot_engine_settles_expired_paper_market(tmp_path) -> None:  # type: ign
     asyncio.run(run())
 
 
+def test_paper_resolution_subtracts_recorded_taker_fees(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    trade_logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
+    trade_logger.log_trade_opened(
+        TradeRecord(
+            trade_id="yes",
+            market="m1",
+            asset="BTC",
+            side="YES",
+            entry_price=0.5,
+            size=10,
+            metadata={"fee_paid": 0.18},
+        )
+    )
+
+    resolved = trade_logger.resolve_market("m1", "YES", resolved_price=100.0, price_to_beat=99.0)
+
+    assert len(resolved) == 1
+    assert resolved[0].pnl == 4.82
+
+
 def test_bot_engine_prefers_official_gamma_resolution(tmp_path) -> None:  # type: ignore[no-untyped-def]
     async def run() -> None:
         trade_logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)

@@ -99,7 +99,7 @@ def _compute_edge(candidate: MarketCandidate) -> tuple[float | None, float | Non
     if ask_up is None or ask_down is None:
         return None, None
     gross_edge = 1.0 - ask_up - ask_down
-    theta = 0.05
+    theta = 0.072
     p_up = ask_up
     p_down = ask_down
     fee_up = theta * p_up * (1 - p_up)

@@ -36,6 +36,7 @@ export type Market = {
   best_bid_down?: number | null;
   best_ask_down?: number | null;
   edge?: number | null;
+  net_edge?: number | null;
   seconds_left?: number | null;
   accepting_orders?: boolean;
   closed?: boolean;
