@@ -53,7 +53,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
     price_feed = create_price_feed(settings)
     target_price_feed = create_target_price_feed(price_feed)
     oracle = ChainlinkOracle(settings=settings)
-    scanner = MarketScanner(client, settings.market_assets, settings.market_timeframes)
+    scanner = MarketScanner(client, settings.market_assets, settings.market_timeframes, runtime_config.enabled_markets)
     engine = BotEngine(
         settings=settings,
         client=client,

@@ -136,7 +136,7 @@ function App() {
       const saved = await api<Config>("/api/config", { method: "PUT", body: JSON.stringify(config) });
       setConfig({ ...emptyConfig, ...saved, paper_mode: saved.paper_mode !== false });
       log("settings saved");
-      if (activeView === "markets") await refreshMarkets();
+      await refreshMarkets();
     } catch (error) {
       log((error as Error).message);
     }

@@ -148,3 +148,44 @@ def gamma_event(slug: str) -> dict[str, object]:
             }
         ],
     }
+
+
+def test_set_enabled_markets_filters_scanner() -> None:
+    scanner = MarketScanner(FakeClient(), enabled_markets={"BTC": ["5m", "15m"], "ETH": ["5m"]})
+
+    scanner.set_enabled_markets({"BTC": ["5m"], "SOL": ["15m"]})
+
+    assert "BTC" in scanner.enabled_markets
+    assert "5m" in scanner.enabled_markets["BTC"]
+    assert "15m" not in scanner.enabled_markets.get("BTC", [])
+    assert "ETH" not in scanner.enabled_markets
+    assert "SOL" in scanner.enabled_markets
+    assert "15m" in scanner.enabled_markets["SOL"]
+
+
+def test_parse_market_respects_enabled_markets() -> None:
+    scanner = MarketScanner(FakeClient(), enabled_markets={"BTC": ["5m"]})
+
+    btc_market = {
+        "question": "Will Bitcoin go up in 5m?",
+        "slug": "btc-updown-5m",
+    }
+    eth_market = {
+        "question": "Will Ethereum go up in 5m?",
+        "slug": "eth-updown-5m",
+    }
+
+    result_btc = scanner.parse_market(btc_market)
+    result_eth = scanner.parse_market(eth_market)
+
+    assert result_btc is not None
+    assert result_btc.asset == "BTC"
+    assert result_eth is None
+
+
+def test_configure_updates_enabled_markets() -> None:
+    scanner = MarketScanner(FakeClient(), enabled_markets={"BTC": ["5m", "15m"], "ETH": ["5m"]})
+
+    scanner.configure(enabled_markets={"BTC": ["5m"], "SOL": ["1h"]})
+
+    assert scanner.enabled_markets == {"BTC": ["5m"], "SOL": ["1h"]}

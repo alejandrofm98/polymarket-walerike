@@ -112,8 +112,6 @@ export function SettingsView({ config, setConfig, onSubmit, onEnabledMarketChang
               </div>
             </div>
 
-            </div>
-
             <Button
               className="sm:col-span-2 bg-primary font-semibold shadow-[0_0_20px_rgba(249,115,22,0.25)] hover:shadow-[0_0_28px_rgba(249,115,22,0.35)]"
               type="submit"

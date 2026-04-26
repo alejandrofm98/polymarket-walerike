@@ -267,6 +267,18 @@ class MarketScanner:
         if enabled_markets is not None:
             self.set_enabled_markets(enabled_markets)
 
+    def set_enabled_markets(self, enabled_markets: dict[str, list[str]]) -> None:
+        normalized: dict[str, list[str]] = {}
+        for raw_asset, raw_timeframes in enabled_markets.items():
+            asset = str(raw_asset).strip().upper()
+            if asset not in self.assets:
+                continue
+            if not isinstance(raw_timeframes, list):
+                continue
+            timeframes = [str(tf).strip().lower() for tf in raw_timeframes if tf]
+            normalized[asset] = list(dict.fromkeys(timeframes))
+        self.enabled_markets = normalized
+
     async def scan(self) -> list[MarketCandidate]:
         if any(hasattr(self.client, name) for name in ("fetch_market_by_slug", "fetch_event_by_slug", "fetch_events")):
             return await self.scan_gamma()
@@ -323,7 +335,13 @@ class MarketScanner:
         asset = self._asset(text)
         if asset is None:
             return None
+        if asset not in self.enabled_markets:
+            return None
         timeframe = self._timeframe(text)
+        if timeframe is None:
+            return None
+        if timeframe not in self.enabled_markets.get(asset, []):
+            return None
         tokens = self._gamma_tokens(market) or self._tokens(market)
         return self._candidate_from_market(market, None, asset, timeframe, tokens)
 
