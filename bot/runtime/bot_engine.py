@@ -63,6 +63,7 @@ class BotEngine:
         self.running = False
         self.paused = False
         self.solo_log = False
+        self.requested_paper_mode = self.paper
         self.last_error: str | None = None
         self.last_tick_at: float | None = None
         self.ticks = 0
@@ -122,6 +123,78 @@ class BotEngine:
         await self._publish("bot_status", self.status())
         return self.status()
 
+    async def set_paper_mode(self, paper_mode: bool) -> dict[str, Any]:
+        paper_mode = bool(paper_mode)
+        previous_paper = self.paper
+        previous_settings_paper = self.settings.paper_mode
+        previous_client = self.client
+        previous_scanner = self.scanner
+        was_running = self.running
+
+        if previous_paper == paper_mode:
+            self.requested_paper_mode = paper_mode
+            self.settings.paper_mode = paper_mode
+            self._apply_runtime_config()
+            await self._publish("bot_status", self.status())
+            return self.status()
+
+        self.paper = paper_mode
+        self.settings.paper_mode = paper_mode
+        try:
+            self._ensure_live_guard()
+        except Exception:
+            self.paper = previous_paper
+            self.settings.paper_mode = previous_settings_paper
+            raise
+
+        self.running = False
+        self.paused = False
+        task = self._task
+        self._task = None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        rt_task = self._realtime_task
+        self._realtime_task = None
+        if rt_task is not None:
+            rt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await rt_task
+        if previous_client is not None and hasattr(previous_client, "close") and self._connected:
+            with contextlib.suppress(Exception):
+                await previous_client.close()
+        self._connected = False
+
+        try:
+            self.client = PolymarketClient(settings=self.settings, paper_mode=paper_mode)
+            self.scanner = MarketScanner(self.client, self.settings.market_assets, self.settings.market_timeframes)
+            self._apply_runtime_config()
+            if was_running:
+                await self._connect()
+                self.running = True
+                self._task = asyncio.create_task(self._loop())
+                if self.realtime_interval > 0:
+                    self._realtime_task = asyncio.create_task(self._realtime_loop())
+        except Exception:
+            self.paper = previous_paper
+            self.settings.paper_mode = previous_settings_paper
+            self.client = previous_client
+            self.scanner = previous_scanner
+            self._connected = False
+            if was_running:
+                with contextlib.suppress(Exception):
+                    await self._connect()
+                    self.running = True
+                    self._task = asyncio.create_task(self._loop())
+                    if self.realtime_interval > 0:
+                        self._realtime_task = asyncio.create_task(self._realtime_loop())
+            raise
+
+        await self._log_event(f"trading mode set to {'paper' if paper_mode else 'live'}")
+        await self._publish("bot_status", self.status())
+        return self.status()
+
     async def run_once(self) -> dict[str, Any]:
         self.last_tick_at = time.time()
         self.ticks += 1
@@ -169,11 +242,19 @@ class BotEngine:
         return summary
 
     def status(self) -> dict[str, Any]:
+        requested_paper_mode = self._requested_paper_mode()
+        live_trading = bool(getattr(self.settings, "live_trading", False))
+        live_blocked = requested_paper_mode is False and not live_trading
+        can_live_trade = not self.paper and live_trading
         return {
             "running": self.running,
             "paused": self.paused,
             "paper_mode": self.paper,
-            "live_trading": bool(getattr(self.settings, "live_trading", False)),
+            "requested_paper_mode": requested_paper_mode,
+            "live_trading": live_trading,
+            "can_live_trade": can_live_trade,
+            "live_blocked": live_blocked,
+            "mode_label": "Live blocked" if live_blocked else "Paper" if self.paper else "Live",
             "solo_log": self.solo_log,
             "status": "paused" if self.paused else "running" if self.running else "stopped",
             "ticks": self.ticks,
@@ -778,6 +859,7 @@ class BotEngine:
         with contextlib.suppress(Exception):
             config = self.runtime_config_store.load()
             validate_runtime_config(config)
+            self.requested_paper_mode = bool(config.paper_mode)
             self.capital_per_trade = float(config.capital_per_trade)
             self.solo_log = bool(config.solo_log)
             if hasattr(self.scanner, "set_enabled_markets"):
@@ -798,6 +880,15 @@ class BotEngine:
             if hasattr(self.risk_manager, "config"):
                 self.risk_manager.config.min_yes_no_sum = 1.0 - float(config.min_margin_for_arbitrage)
                 self.risk_manager.config.hedge_min_yes_no_sum = 2.0 - float(config.min_margin_for_arbitrage)
+
+    def _requested_paper_mode(self) -> bool:
+        if self.runtime_config_store is None or not hasattr(self.runtime_config_store, "load"):
+            return self.requested_paper_mode
+        with contextlib.suppress(Exception):
+            config = self.runtime_config_store.load()
+            validate_runtime_config(config)
+            self.requested_paper_mode = bool(config.paper_mode)
+        return self.requested_paper_mode
 
     def _ensure_live_guard(self) -> None:
         live_env = os.getenv("POLYMARKET_LIVE_TRADING", "").strip().lower() in {"1", "true", "yes", "on"}

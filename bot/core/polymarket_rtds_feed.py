@@ -39,6 +39,8 @@ class PriceTick:
 class PolymarketRTDSFeed:
     """Polymarket RTDS feed for crypto prices."""
 
+    SUPPORTED_TOPICS = {"crypto_prices_chainlink", "crypto_prices"}
+
     SYMBOL_MAP = {
         "BTC": "btc/usd",
         "ETH": "eth/usd",
@@ -53,9 +55,10 @@ class PolymarketRTDSFeed:
         "xrp/usd": "XRP",
     }
 
-    def __init__(self, assets: list[str] | None = None, history_limit: int = 120) -> None:
+    def __init__(self, assets: list[str] | None = None, history_limit: int = 120, topic: str = "crypto_prices_chainlink") -> None:
         self.assets = assets or ["BTC", "ETH", "SOL"]
         self.history_limit = history_limit
+        self.topic = topic if topic in self.SUPPORTED_TOPICS else "crypto_prices_chainlink"
         self.latest: dict[str, PriceTick] = {}
         self.history: dict[str, Deque[PriceTick]] = {
             asset: deque(maxlen=history_limit) for asset in self.assets
@@ -151,7 +154,7 @@ class PolymarketRTDSFeed:
             "action": "subscribe",
             "subscriptions": [
                 {
-                    "topic": "crypto_prices",
+                    "topic": self.topic,
                     "type": "*",
                     "filters": f
                 }
@@ -223,7 +226,7 @@ class PolymarketRTDSFeed:
             
             topic = payload.get("topic", "")
             data = payload.get("payload", {})
-            if topic and topic != "crypto_prices":
+            if topic and topic not in self.SUPPORTED_TOPICS:
                 return None
 
             msg_type = payload.get("type")

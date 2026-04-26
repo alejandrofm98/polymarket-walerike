@@ -5,6 +5,7 @@ import pytest
 from bot.config.settings import Settings
 from bot.config.runtime_config import RuntimeConfigStore
 from bot.data.trade_logger import PositionRecord, TradeLogger, TradeRecord
+import bot.web.api_routes as api_routes_module
 from bot.web.server import create_app
 
 try:
@@ -41,6 +42,20 @@ class FakeEngine:
     async def set_solo_log(self, enabled: bool) -> dict[str, object]:
         self.solo_log = enabled
         return self.status()
+
+    async def set_paper_mode(self, paper_mode: bool) -> dict[str, object]:
+        self.paper = paper_mode
+        return self.status()
+
+
+class FailingModeEngine(FakeEngine):
+    async def set_paper_mode(self, paper_mode: bool) -> dict[str, object]:
+        raise RuntimeError("POLYMARKET_LIVE_TRADING=true required for live mode")
+
+
+class FailingStartEngine(FakeEngine):
+    async def start(self) -> dict[str, object]:
+        raise RuntimeError("Live mode requires optional package py-clob-client")
 
 
 class FakeLogger:
@@ -105,6 +120,66 @@ def test_api_config_persists_and_validates(tmp_path) -> None:  # type: ignore[no
         assert response.json()["capital_per_trade"] == 33.0
         assert client.get("/api/config").json()["min_margin_for_arbitrage"] == 0.04
         assert client.put("/api/config", json={"capital_per_trade": 0}).status_code == 400
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_status_marks_requested_live_without_env_as_blocked(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    store.update({"paper_mode": False})
+    app = create_app(Settings(paper_mode=True, live_trading=False), {"runtime_config_store": store, "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        payload = client.get("/api/status").json()
+
+    assert payload["paper_mode"] is True
+    assert payload["requested_paper_mode"] is False
+    assert payload["live_blocked"] is True
+    assert payload["live_block_reason"] == "POLYMARKET_LIVE_TRADING=true required for live mode"
+    assert payload["mode_label"] == "Live blocked"
+    assert payload["runtime"]["live_blocked"] is True
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_config_switches_mode_without_restart(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(api_routes_module.importlib.util, "find_spec", lambda name: object() if name == "py_clob_client.client" else None)
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    engine = FakeEngine()
+    app = create_app(Settings(paper_mode=True, live_trading=True), {"bot_engine": engine, "runtime_config_store": store, "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        response = client.put("/api/config", json={"paper_mode": False})
+        assert response.status_code == 200
+        payload = client.get("/api/status").json()
+
+    assert engine.paper is False
+    assert payload["paper_mode"] is False
+    assert payload["requested_paper_mode"] is False
+    assert payload["live_blocked"] is False
+    assert payload["mode_label"] == "Live"
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_config_rolls_back_mode_when_switch_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    app = create_app(Settings(paper_mode=True, live_trading=False), {"bot_engine": FailingModeEngine(), "runtime_config_store": store, "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        response = client.put("/api/config", json={"paper_mode": False})
+        persisted = client.get("/api/config").json()
+
+    assert response.status_code == 400
+    assert persisted["paper_mode"] is True
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_bot_start_returns_clear_error_when_live_sdk_missing() -> None:
+    app = create_app(Settings(paper_mode=False, live_trading=True), {"bot_engine": FailingStartEngine(), "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        response = client.post("/api/bot/start")
+
+    assert response.status_code == 400
+    assert "py-clob-client" in response.json()["detail"]
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")

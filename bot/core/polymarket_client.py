@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib
+import importlib.util
 import logging
 import time
 import json
@@ -293,9 +294,12 @@ class PolymarketClient:
         return self._event_queue
 
     def _build_clob_client(self) -> Any:
-        client_module = importlib.import_module("py_clob_client.client")
-        types_module = importlib.import_module("py_clob_client.clob_types")
-        constants_module = importlib.import_module("py_clob_client.order_builder.constants")
+        try:
+            client_module = importlib.import_module("py_clob_client.client")
+            types_module = importlib.import_module("py_clob_client.clob_types")
+            constants_module = importlib.import_module("py_clob_client.order_builder.constants")
+        except ImportError as exc:
+            raise RuntimeError("Live mode requires optional package py-clob-client") from exc
         self._sdk = {
             "ApiCreds": types_module.ApiCreds,
             "OrderArgs": types_module.OrderArgs,
@@ -346,6 +350,13 @@ class PolymarketClient:
     def _ensure_live_trading_enabled(self) -> None:
         if not self.paper_mode and not self.settings.live_trading:
             raise RuntimeError("POLYMARKET_LIVE_TRADING=true required for live CLOB access")
+
+    @staticmethod
+    def live_sdk_available() -> bool:
+        try:
+            return importlib.util.find_spec("py_clob_client.client") is not None
+        except ModuleNotFoundError:
+            return False
 
     def _sdk_order_type(self, order_type: OrderType) -> Any:
         sdk_order_type = self._require_sdk()["OrderType"]

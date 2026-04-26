@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from contextlib import suppress
+import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +60,37 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
             "latest": {k: {"price": v.price, "timestamp": v.timestamp} for k, v in latest.items()} if latest else {},
         }
 
+    def runtime_mode_status(runtime_payload: dict[str, Any]) -> dict[str, Any]:
+        requested_paper_mode = runtime_payload.get("requested_paper_mode")
+        if requested_paper_mode is None:
+            with suppress(Exception):
+                requested_paper_mode = bool(config_store.load().paper_mode)
+        if requested_paper_mode is None:
+            requested_paper_mode = bool(runtime_payload.get("paper_mode", settings.paper_mode))
+        paper_mode = bool(runtime_payload.get("paper_mode", settings.paper_mode))
+        live_trading = bool(getattr(settings, "live_trading", False))
+        try:
+            live_sdk_available = importlib.util.find_spec("py_clob_client.client") is not None
+        except ModuleNotFoundError:
+            live_sdk_available = False
+        live_block_reason = None
+        if requested_paper_mode is False and not live_trading:
+            live_block_reason = "POLYMARKET_LIVE_TRADING=true required for live mode"
+        elif requested_paper_mode is False and not live_sdk_available:
+            live_block_reason = "Live mode requires optional package py-clob-client"
+        live_blocked = live_block_reason is not None
+        can_live_trade = not paper_mode and live_trading
+        return {
+            "requested_paper_mode": requested_paper_mode,
+            "paper_mode": paper_mode,
+            "live_trading": live_trading,
+            "live_sdk_available": live_sdk_available,
+            "can_live_trade": can_live_trade,
+            "live_blocked": live_blocked,
+            "live_block_reason": live_block_reason,
+            "mode_label": "Live blocked" if live_blocked else "Paper" if paper_mode else "Live",
+        }
+
     def _enrich_market_with_price(market: Any, price_feed: Any, scanner: Any) -> None:
         if price_feed is None or scanner is None:
             return
@@ -72,7 +105,8 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
             if tick is not None and hasattr(tick, "price"):
                 market.current_price = float(tick.price)
                 if "PolymarketRTDS" in price_source:
-                    market.current_price_source = "polymarket_rtds"
+                    topic = getattr(price_feed, "topic", "")
+                    market.current_price_source = "polymarket_rtds_chainlink" if topic == "crypto_prices_chainlink" else "polymarket_rtds"
                 elif "Binance" in price_source:
                     market.current_price_source = "binance_live"
                 else:
@@ -82,7 +116,8 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
                 pass_synced_price = price_feed.latest.get(asset.upper())
                 if pass_synced_price and hasattr(pass_synced_price, "price"):
                     market.current_price = float(pass_synced_price.price)
-                    market.current_price_source = "polymarket_rtds"
+                    topic = getattr(price_feed, "topic", "")
+                    market.current_price_source = "polymarket_rtds_chainlink" if topic == "crypto_prices_chainlink" else "polymarket_rtds"
                 else:
                     market.current_price_source = "polymarket_rtds_pending"
             else:
@@ -113,9 +148,12 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
     @router.get("/status")
     async def status() -> dict[str, Any]:
         pf_status = get_price_feed_status()
-        base = {"runtime": engine.status(), "paper_mode": engine.paper, "live_trading": settings.live_trading}
+        runtime_payload = engine.status() if engine is not None and hasattr(engine, "status") else asdict(runtime)
+        mode_status = runtime_mode_status(runtime_payload)
+        runtime_payload.update(mode_status)
+        base = {"runtime": runtime_payload, **mode_status}
         if engine is None or not hasattr(engine, "status"):
-            base = {"runtime": asdict(runtime), "paper_mode": settings.paper_mode, "live_trading": settings.live_trading}
+            base = {"runtime": runtime_payload, **mode_status}
         base["price_feed"] = pf_status
         return base
 
@@ -127,11 +165,24 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
 
     @router.put("/config")
     async def update_config(payload: dict[str, Any]) -> dict[str, Any]:
+        previous_config = config_store.load()
         try:
             config = config_store.update(payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if engine is not None and hasattr(engine, "_apply_runtime_config"):
+        mode_changed = "paper_mode" in payload and bool(config.paper_mode) != bool(previous_config.paper_mode)
+        if mode_changed and engine is not None and hasattr(engine, "set_paper_mode"):
+            try:
+                await engine.set_paper_mode(bool(config.paper_mode))
+            except Exception as exc:  # noqa: BLE001 - restore safe persisted mode on failed live switch
+                if hasattr(config_store, "save"):
+                    config_store.save(previous_config)
+                elif hasattr(config_store, "update"):
+                    config_store.update({"paper_mode": previous_config.paper_mode})
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            services["polymarket_client"] = getattr(engine, "client", services.get("polymarket_client"))
+            services["market_scanner"] = getattr(engine, "scanner", services.get("market_scanner"))
+        elif engine is not None and hasattr(engine, "_apply_runtime_config"):
             engine._apply_runtime_config()
         return asdict(config)
 
@@ -233,16 +284,19 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
     @router.post("/bot/{action}")
     async def control_bot(action: str) -> dict[str, Any]:
         if engine is not None:
-            if action == "start":
-                state = await engine.start()
-            elif action == "pause":
-                state = await engine.pause()
-            elif action == "stop":
-                state = await engine.stop()
-            elif action == "solo-log":
-                state = await engine.set_solo_log(True)
-            else:
-                return {"ok": False, "error": f"unknown action: {action}", "runtime": engine.status()}
+            try:
+                if action == "start":
+                    state = await engine.start()
+                elif action == "pause":
+                    state = await engine.pause()
+                elif action == "stop":
+                    state = await engine.stop()
+                elif action == "solo-log":
+                    state = await engine.set_solo_log(True)
+                else:
+                    return {"ok": False, "error": f"unknown action: {action}", "runtime": engine.status()}
+            except RuntimeError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"ok": True, "runtime": state}
 
         if action == "start":

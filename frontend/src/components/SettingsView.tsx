@@ -1,25 +1,30 @@
 import { FormEvent } from "react";
+import { AlertTriangle, FlaskConical, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import type { Config } from "@/types";
+import type { Config, Runtime } from "@/types";
 
 const assets = ["BTC", "ETH", "SOL"];
 const timeframes = ["5m", "15m", "1h"];
 
 interface SettingsViewProps {
   config: Config;
+  runtime: Runtime;
   setConfig: React.Dispatch<React.SetStateAction<Config>>;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onEnabledMarketChange: (asset: string, timeframe: string, checked: boolean) => void;
 }
 
-export function SettingsView({ config, setConfig, onSubmit, onEnabledMarketChange }: SettingsViewProps) {
+export function SettingsView({ config, runtime, setConfig, onSubmit, onEnabledMarketChange }: SettingsViewProps) {
   function setNumber(key: keyof Config, value: string) {
     setConfig((current) => ({ ...current, [key]: Number(value) }));
   }
+
+  const liveRequested = config.paper_mode === false;
+  const liveBlocked = runtime.live_blocked === true || (liveRequested && runtime.live_trading === false);
 
   return (
     <form className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]" onSubmit={onSubmit}>
@@ -95,19 +100,42 @@ export function SettingsView({ config, setConfig, onSubmit, onEnabledMarketChang
               />
             </SettingField>
 
-            {/* Paper mode */}
-            <div className="flex items-center justify-between rounded-xl border border-white/8 bg-white/[0.02] p-4 sm:col-span-2">
-              <div>
-                <Label className="text-sm font-semibold text-foreground">Paper mode</Label>
-                <p className="mt-0.5 text-xs text-muted-foreground/60">Live trading remains backend-gated.</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className={cn("text-xs font-semibold", config.paper_mode !== false ? "text-amber-400" : "text-muted-foreground/50")}>
-                  {config.paper_mode !== false ? "Paper" : "Live"}
-                </span>
+            {/* Trading mode */}
+            <div className={cn(
+              "rounded-xl border p-4 sm:col-span-2",
+              liveRequested
+                ? liveBlocked
+                  ? "border-red-500/25 bg-red-500/10"
+                  : "border-emerald-500/25 bg-emerald-500/10"
+                : "border-amber-500/25 bg-amber-500/10"
+            )}>
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div>
+                  <Label className="text-sm font-semibold text-foreground">Trading Mode</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground/60">Paper simulates orders. Live requires backend env gate.</p>
+                </div>
                 <Switch
-                  checked={config.paper_mode !== false}
+                  checked={!liveRequested}
                   onCheckedChange={(checked) => setConfig((current) => ({ ...current, paper_mode: checked }))}
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <ModeOption
+                  active={!liveRequested}
+                  tone="paper"
+                  icon={<FlaskConical className="h-4 w-4" />}
+                  title="Paper"
+                  description="Orders stay simulated"
+                  onClick={() => setConfig((current) => ({ ...current, paper_mode: true }))}
+                />
+                <ModeOption
+                  active={liveRequested}
+                  tone={liveBlocked ? "blocked" : "live"}
+                  icon={liveBlocked ? <AlertTriangle className="h-4 w-4" /> : <Zap className="h-4 w-4" />}
+                  title={liveBlocked ? "Live blocked" : "Live"}
+                  description={liveBlocked ? runtime.live_block_reason || "Live requirements missing" : "Real orders enabled"}
+                  onClick={() => setConfig((current) => ({ ...current, paper_mode: false }))}
                 />
               </div>
             </div>
@@ -116,7 +144,7 @@ export function SettingsView({ config, setConfig, onSubmit, onEnabledMarketChang
               className="sm:col-span-2 bg-primary font-semibold shadow-[0_0_20px_rgba(249,115,22,0.25)] hover:shadow-[0_0_28px_rgba(249,115,22,0.35)]"
               type="submit"
             >
-              Save Settings
+              {liveRequested ? "Save Live Request" : "Save Paper Mode"}
             </Button>
           </div>
         </div>
@@ -178,6 +206,42 @@ function SettingField({
       </div>
       {children}
     </div>
+  );
+}
+
+function ModeOption({
+  active,
+  tone,
+  icon,
+  title,
+  description,
+  onClick,
+}: {
+  active: boolean;
+  tone: "paper" | "live" | "blocked";
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) {
+  const toneClass = {
+    paper: active ? "border-amber-500/40 bg-amber-500/10 text-amber-200" : "border-white/8 bg-white/[0.02] text-muted-foreground",
+    live: active ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-white/8 bg-white/[0.02] text-muted-foreground",
+    blocked: active ? "border-red-500/40 bg-red-500/10 text-red-200" : "border-white/8 bg-white/[0.02] text-muted-foreground",
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn("rounded-xl border p-3 text-left transition-all hover:border-primary/40", toneClass[tone])}
+    >
+      <div className="mb-2 flex items-center gap-2 text-sm font-bold uppercase tracking-wide">
+        {icon}
+        {title}
+      </div>
+      <p className="text-xs opacity-75">{description}</p>
+    </button>
   );
 }
 

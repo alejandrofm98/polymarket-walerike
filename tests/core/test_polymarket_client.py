@@ -83,6 +83,24 @@ def test_live_trading_guard_blocks_sdk_import_before_configured() -> None:
     asyncio.run(run())
 
 
+def test_live_connect_missing_sdk_reports_clear_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    def missing_module(name: str) -> object:
+        if name.startswith("py_clob_client"):
+            raise ImportError(name)
+        raise AssertionError(name)
+
+    monkeypatch.setattr(polymarket_client_module.importlib, "import_module", missing_module)
+
+    async def run() -> None:
+        settings = Settings(paper_mode=False, live_trading=True)
+        client = PolymarketClient(settings=settings, paper_mode=False)
+
+        with pytest.raises(RuntimeError, match="py-clob-client"):
+            await client.connect()
+
+    asyncio.run(run())
+
+
 def test_websocket_payload_builders_and_urls() -> None:
     settings = Settings(api_key="key")
     client = PolymarketClient(settings=settings, paper_mode=True)

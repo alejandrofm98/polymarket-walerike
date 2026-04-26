@@ -77,7 +77,8 @@ def _update_spot_fields(market: Any, scanner: Any, price_feed: Any) -> None:
         market.current_price = current_price
 
         if "PolymarketRTDS" in price_source:
-            market.current_price_source = "polymarket_rtds"
+            topic = getattr(price_feed, "topic", "")
+            market.current_price_source = "polymarket_rtds_chainlink" if topic == "crypto_prices_chainlink" else "polymarket_rtds"
         elif "Binance" in price_source:
             market.current_price_source = "binance_live"
         else:
@@ -98,7 +99,8 @@ def _refresh_computed_fields(market: Any) -> None:
 def _historical_source_label(price_feed: Any) -> str:
     price_source = type(price_feed).__name__ if price_feed is not None else "Unknown"
     if "PolymarketRTDS" in price_source:
-        return "polymarket_rtds"
+        topic = getattr(price_feed, "topic", "")
+        return "polymarket_rtds_chainlink" if topic == "crypto_prices_chainlink" else "polymarket_rtds"
     if "Binance" in price_source:
         return "binance_historical_window_start"
     return "unknown"
@@ -327,7 +329,7 @@ async def _realtime_market_loop(
     last_scan = 0
     active_markets: list[Any] = []
     subscribed_tokens: set[str] = set()
-    target_fetched: dict[str, bool] = {}
+    target_fetched: dict[str, tuple[bool, float]] = {}  # (fetched_flag, last_attempt_ts)
 
     async def handle_market_ws(event: Any) -> None:
         payload = getattr(event, "payload", None)
@@ -342,10 +344,19 @@ async def _realtime_market_loop(
 
         slug_key = f"{market.asset}:{market.timeframe}:{market.event_slug or market.slug or ''}"
         target_cache_key = f"target:{slug_key}"
+        now = time.time()
 
-        if target_cache_key in target_fetched and target_fetched[target_cache_key]:
-            _apply_cached_target(market, scanner)
-            return
+        # Check if we already have a cached target for this exact window.
+        if target_cache_key in target_fetched:
+            cached_flag, cached_ts = target_fetched[target_cache_key]
+            # Only use cache if we successfully fetched a price (not just attempted).
+            if cached_flag:
+                _apply_cached_target(market, scanner)
+                return
+            # If attempt failed, apply backoff before retrying (every 30s max).
+            if now - cached_ts < 30:
+                _apply_cached_target(market, scanner)
+                return
 
         # If scan() already extracted price_to_beat from market text, cache and done.
         existing_price = getattr(market, "price_to_beat", None)
@@ -357,7 +368,7 @@ async def _realtime_market_loop(
                 "timestamp": window_ts,
                 "source": getattr(market, "target_price_source", None) or "text_extraction",
             }
-            target_fetched[target_cache_key] = True
+            target_fetched[target_cache_key] = (True, now)
             return
 
         try:
@@ -394,13 +405,16 @@ async def _realtime_market_loop(
                 }
                 market.price_to_beat = target_price
                 market.target_price_source = source_label
+                # Mark as successfully fetched.
+                target_fetched[target_cache_key] = (True, now)
             else:
+                # Mark attempt but allow retry later.
+                target_fetched[target_cache_key] = (False, now)
                 _apply_cached_target(market, scanner)
-            target_fetched[target_cache_key] = True
         except Exception as exc:
             logger.warning("Failed to fetch target price for {}: {}", market.asset, exc)
+            target_fetched[target_cache_key] = (False, now)
             _apply_cached_target(market, scanner)
-            target_fetched[target_cache_key] = True
 
     client = getattr(scanner, "client", None)
     if client is not None and hasattr(client, "register_callback"):

@@ -12,10 +12,10 @@
   "max_buys_per_side": 4,
   "max_sum_avg": 0.98,
   "min_margin_for_arbitrage": 0.02,
-  "paper_mode": true,
+  "paper_mode": false,
   "reversal_delta": 0.02,
   "second_side_buffer": 0.01,
   "second_side_time_threshold_ms": 200.0,
-  "shares_per_order": 5.0,
+  "shares_per_order": 2.0,
   "solo_log": false
 }

@@ -5,6 +5,13 @@ export type Runtime = {
   running?: boolean;
   paused?: boolean;
   paper_mode?: boolean;
+  requested_paper_mode?: boolean;
+  live_trading?: boolean;
+  live_sdk_available?: boolean;
+  can_live_trade?: boolean;
+  live_blocked?: boolean;
+  live_block_reason?: string | null;
+  mode_label?: string;
 };
 
 export type Config = {

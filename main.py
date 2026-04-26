@@ -8,6 +8,7 @@ from typing import Any
 
 from bot.config.logging import configure_logging
 from bot.config.runtime_config import RuntimeConfigStore
+from bot.config.runtime_config import validate_runtime_config
 from bot.config.settings import Settings
 from bot.core.binance_feed import BinanceTickerFeed
 from bot.core.polymarket_client import PolymarketClient
@@ -24,8 +25,10 @@ def create_price_feed(settings: Settings) -> Any:
     """Create price feed based on PRICE_FEED_SOURCE config."""
     source = getattr(settings, "price_feed_source", "binance")
     
-    if source == "polymarket_rtds":
-        return PolymarketRTDSFeed(assets=list(settings.market_assets))
+    if source == "polymarket_rtds_chainlink":
+        return PolymarketRTDSFeed(assets=list(settings.market_assets), topic="crypto_prices_chainlink")
+    elif source == "polymarket_rtds":
+        return PolymarketRTDSFeed(assets=list(settings.market_assets), topic="crypto_prices")
     elif source == "binance":
         return BinanceTickerFeed()
     else:
@@ -46,7 +49,12 @@ def create_target_price_feed(price_feed: Any) -> Any:
 def build_services(settings: Settings) -> dict[str, Any]:
     runtime_config_store = RuntimeConfigStore()
     runtime_config = runtime_config_store.load()
-    client = PolymarketClient(settings=settings, paper_mode=settings.paper_mode)
+    validate_runtime_config(runtime_config)
+    requested_paper_mode = bool(runtime_config.paper_mode)
+    can_live_trade = not requested_paper_mode and bool(settings.live_trading)
+    effective_paper_mode = requested_paper_mode or not can_live_trade
+    settings.paper_mode = effective_paper_mode
+    client = PolymarketClient(settings=settings, paper_mode=effective_paper_mode)
     trade_logger = TradeLogger(settings.database_path)
     broadcaster = WebSocketBroadcaster()
     price_feed = create_price_feed(settings)
@@ -61,14 +69,14 @@ def build_services(settings: Settings) -> dict[str, Any]:
         scanner=scanner,
         price_feed=price_feed,
         oracle=None,
-        paper=settings.paper_mode,
+        paper=effective_paper_mode,
         scan_interval=settings.scan_interval,
         realtime_interval=settings.realtime_interval,
     )
     return {
         "polymarket_client": client,
         "trade_logger": trade_logger,
-        "runtime_state": BotRuntimeState(paper_mode=settings.paper_mode),
+        "runtime_state": BotRuntimeState(paper_mode=effective_paper_mode),
         "runtime_config_store": runtime_config_store,
         "runtime_config": runtime_config,
         "broadcaster": broadcaster,

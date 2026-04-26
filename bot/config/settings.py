@@ -49,7 +49,7 @@ DEFAULT_DATABASE_PATH = "data/trades.db"
 DEFAULT_FRONTEND_DIR = "frontend"
 DEFAULT_SCAN_INTERVAL = 10.0
 DEFAULT_REALTIME_INTERVAL = 0.2
-DEFAULT_PRICE_FEED_SOURCE = "polymarket_rtds"
+DEFAULT_PRICE_FEED_SOURCE = "polymarket_rtds_chainlink"
 
 
 @dataclass(slots=True)

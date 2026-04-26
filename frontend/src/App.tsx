@@ -136,7 +136,7 @@ function App() {
       const saved = await api<Config>("/api/config", { method: "PUT", body: JSON.stringify(config) });
       setConfig({ ...emptyConfig, ...saved, paper_mode: saved.paper_mode !== false });
       log("settings saved");
-      await refreshMarkets();
+      await Promise.allSettled([refreshStatus(), refreshMarkets()]);
     } catch (error) {
       log((error as Error).message);
     }
@@ -313,6 +313,7 @@ function App() {
           {activeView === "settings" && (
             <SettingsView
               config={config}
+              runtime={runtime}
               setConfig={setConfig}
               onSubmit={saveSettings}
               onEnabledMarketChange={updateEnabledMarket}
