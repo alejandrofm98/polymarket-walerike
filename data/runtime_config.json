@@ -5,8 +5,7 @@
   "email_loss_alert_pct": 0.0,
   "enabled_markets": {
     "BTC": [
-      "5m",
-      "15m"
+      "5m"
     ]
   },
   "entry_threshold": 0.499,

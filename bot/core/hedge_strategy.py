@@ -51,6 +51,7 @@ class MarketSnapshot:
     market_slug: str | None = None
     end_date: str | None = None
     price_to_beat: float | None = None
+    window_start_timestamp: int | None = None
 
 
 @dataclass(slots=True)
@@ -184,6 +185,8 @@ class HedgeStrategy:
         price = snapshot.yes_price if side == "YES" else snapshot.no_price
         liquidity = snapshot.yes_liquidity if side == "YES" else snapshot.no_liquidity
         buy_count = row.buy_count_yes if side == "YES" else row.buy_count_no
+        if liquidity < self.config.min_liquidity:
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
         if buy_count >= self.config.max_buys_per_side:
             opposite = "NO" if side == "YES" else "YES"
             opposite_count = row.buy_count_no if opposite == "NO" else row.buy_count_yes

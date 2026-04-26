@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import asdict
@@ -301,6 +302,11 @@ class BotEngine:
         if size < 1:
             self.logger.info(f"[SKIP] {label} leg: size {size:.2f} below minimum 1")
             return 0
+        if self.paper and side is OrderSide.BUY:
+            available = snapshot.yes_liquidity if label == "YES" else snapshot.no_liquidity
+            if size > available:
+                self.logger.info(f"[SKIP] {label} leg: paper book liquidity {available:.2f} below requested size {size:.2f}")
+                return 0
         expiration = int(time.time()) + 60
         order = await self.client.place_order(
             OrderRequest(
@@ -334,7 +340,8 @@ class BotEngine:
                         "timeframe": snapshot.timeframe,
                         "market_slug": snapshot.market_slug,
                         "end_date": snapshot.end_date,
-                        "price_to_beat": snapshot.price_to_beat,
+                        "price_to_beat": await self._target_price_for_snapshot(snapshot),
+                        "window_start_timestamp": snapshot.window_start_timestamp,
                         "opened_spot_price": snapshot.spot_price,
                         "fee_rate": fee_rate,
                         "fee_paid": fee_paid,
@@ -367,6 +374,18 @@ class BotEngine:
         down_price = market.best_ask_down if market.best_ask_down is not None else market.down_price if market.down_price is not None else self._price(down, market.raw, "no")
         if not up_token_id or not down_token_id or up_price is None or down_price is None:
             return None
+        yes_liquidity = self._buy_liquidity_at_price(
+            market.asks_up,
+            up_price,
+            fallback=self._liquidity_fallback(up, market),
+            book_price=market.best_ask_up,
+        )
+        no_liquidity = self._buy_liquidity_at_price(
+            market.asks_down,
+            down_price,
+            fallback=self._liquidity_fallback(down, market),
+            book_price=market.best_ask_down,
+        )
         return MarketSnapshot(
             market_id=market.condition_id or market.market_id,
             asset=market.asset,
@@ -375,15 +394,37 @@ class BotEngine:
             no_token_id=down_token_id,
             yes_price=up_price,
             no_price=down_price,
-            yes_liquidity=float((up or {}).get("liquidity") or (up or {}).get("size") or market.liquidity or market.raw.get("liquidity") or 100.0),
-            no_liquidity=float((down or {}).get("liquidity") or (down or {}).get("size") or market.liquidity or market.raw.get("liquidity") or 100.0),
+            yes_liquidity=yes_liquidity,
+            no_liquidity=no_liquidity,
             spot_price=float(getattr(tick, "price")),
             oracle_price=float(getattr(oracle_price, "price")),
             timestamp=time.time(),
             market_slug=market.market_slug or market.slug or market.event_slug,
             end_date=market.end_date,
             price_to_beat=market.price_to_beat,
+            window_start_timestamp=market.window_start_timestamp,
         )
+
+    @staticmethod
+    def _buy_liquidity_at_price(levels: list[dict[str, float]], limit_price: float, *, fallback: float, book_price: float | None) -> float:
+        if levels:
+            return sum(level["size"] for level in levels if level["price"] <= limit_price)
+        if book_price is not None:
+            return 0.0
+        return fallback
+
+    @staticmethod
+    def _liquidity_fallback(token: dict[str, Any] | None, market: MarketCandidate) -> float:
+        for value in (
+            (token or {}).get("liquidity"),
+            (token or {}).get("size"),
+            market.liquidity,
+            market.raw.get("liquidity"),
+        ):
+            if value is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    return float(value)
+        return 100.0
 
     async def _settle_paper_trades(self, markets: list[MarketCandidate]) -> None:
         if not self.paper or self.trade_logger is None or not hasattr(self.trade_logger, "list_trades"):
@@ -403,6 +444,8 @@ class BotEngine:
             price_to_beat = getattr(market, "price_to_beat", None) if market is not None else None
             if price_to_beat is None:
                 price_to_beat = metadata.get("price_to_beat")
+            if price_to_beat is None:
+                price_to_beat = await self._target_price_for_metadata(asset, metadata)
 
             official = await self._official_market_resolution(market, metadata)
             if official is None and not self._end_date_has_passed(end_date):
@@ -458,6 +501,94 @@ class BotEngine:
             await self._publish("trade_resolved", payload)
             await self._publish("positions", {"positions": self._positions_payload()})
             await self._publish("bot_status", self.status())
+
+    async def _target_price_for_snapshot(self, snapshot: MarketSnapshot) -> float | None:
+        if snapshot.price_to_beat is not None:
+            return float(snapshot.price_to_beat)
+        price, window_start = await self._resolve_target_price(
+            snapshot.asset,
+            snapshot.timeframe,
+            snapshot.market_slug,
+            snapshot.window_start_timestamp,
+        )
+        if price is not None:
+            snapshot.price_to_beat = price
+        if window_start is not None:
+            snapshot.window_start_timestamp = window_start
+        return price
+
+    async def _target_price_for_metadata(self, asset: str, metadata: dict[str, Any]) -> float | None:
+        price, window_start = await self._resolve_target_price(
+            asset,
+            str(metadata.get("timeframe") or ""),
+            str(metadata.get("market_slug") or "") or None,
+            self._int_or_none(metadata.get("window_start_timestamp")),
+        )
+        if price is not None:
+            metadata["price_to_beat"] = price
+        if window_start is not None:
+            metadata["window_start_timestamp"] = window_start
+        return price
+
+    async def _resolve_target_price(self, asset: str, timeframe: str | None, slug: str | None, window_start: int | None) -> tuple[float | None, int | None]:
+        slug_window = self._window_start_from_slug(slug)
+        window_start = window_start or slug_window
+        if window_start is None:
+            return None, None
+
+        price = await self._fetch_crypto_api_target(asset, timeframe, window_start)
+        if price is not None:
+            return price, window_start
+
+        if slug and hasattr(self.client, "fetch_page_html"):
+            with contextlib.suppress(Exception):
+                html = await self.client.fetch_page_html(slug)
+                from bot.web.server import _scrape_target_price_from_html
+
+                scraped, _source = _scrape_target_price_from_html(html, slug)
+                if scraped is not None:
+                    return float(scraped), window_start
+        return None, window_start
+
+    async def _fetch_crypto_api_target(self, asset: str, timeframe: str | None, window_start: int) -> float | None:
+        if not hasattr(self.client, "fetch_crypto_price"):
+            return None
+        tf = str(timeframe or "").lower()
+        variants = {"5m": ("fiveminute", 300), "15m": ("fifteen", 900)}
+        variant = variants.get(tf)
+        if variant is None:
+            return None
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            variant_name, seconds = variant
+            start = datetime.fromtimestamp(float(window_start), timezone.utc)
+            end = start + timedelta(seconds=seconds)
+            payload = await self.client.fetch_crypto_price(
+                str(asset).upper(),
+                start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                variant_name,
+                end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            if isinstance(payload, dict) and payload.get("openPrice") is not None:
+                return float(payload["openPrice"])
+        except Exception as exc:  # noqa: BLE001 - target fetch is best-effort
+            await self._log_event(f"target price fetch failed asset={asset} window={window_start}: {exc}")
+        return None
+
+    @staticmethod
+    def _window_start_from_slug(slug: str | None) -> int | None:
+        match = re.search(r"-(\d{10})$", str(slug or ""))
+        if not match:
+            return None
+        return int(match.group(1))
+
+    @staticmethod
+    def _int_or_none(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _end_date_has_passed(end_date: Any) -> bool:

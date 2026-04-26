@@ -58,6 +58,34 @@ class ReversalScanner:
         ]
 
 
+class BookReversalScanner:
+    def __init__(self, yes_ask_size: float, *, include_asks: bool = True) -> None:
+        self.prices = [0.4, 0.43]
+        self.calls = 0
+        self.yes_ask_size = yes_ask_size
+        self.include_asks = include_asks
+
+    async def scan(self) -> list[MarketCandidate]:
+        price = self.prices[min(self.calls, len(self.prices) - 1)]
+        self.calls += 1
+        asks_up = [{"price": price, "size": self.yes_ask_size}] if self.include_asks else []
+        return [
+            MarketCandidate(
+                market_id="btc-15m",
+                question="Bitcoin up or down in 15m?",
+                asset="BTC",
+                timeframe="15m",
+                market_slug="btc-updown-15m-book-test",
+                up_token_id="yes-token",
+                down_token_id="no-token",
+                best_ask_up=price,
+                best_ask_down=0.5,
+                asks_up=asks_up,
+                asks_down=[{"price": 0.5, "size": 100.0}],
+            )
+        ]
+
+
 class EmptyScanner:
     async def scan(self) -> list[MarketCandidate]:
         return []
@@ -117,6 +145,13 @@ class OfficialResolutionClient(FakeClient):
             "outcomes": '["Yes", "No"]',
             "outcomePrices": '["0", "1"]',
         }
+
+
+class TargetPriceClient(FakeClient):
+    async def fetch_crypto_price(self, symbol: str, event_start_time: str, variant: str, end_date: str) -> dict[str, object]:
+        assert symbol == "BTC"
+        assert variant == "fiveminute"
+        return {"openPrice": 99.0}
 
 
 class FakeLogger:
@@ -223,6 +258,67 @@ def test_bot_engine_skips_missing_prices_without_crashing() -> None:
     asyncio.run(run())
 
 
+def test_paper_order_requires_sufficient_sell_liquidity() -> None:
+    async def run() -> None:
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            scanner=BookReversalScanner(yes_ask_size=100.0),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+        )
+
+        await engine.run_once()
+        summary = await engine.run_once()
+
+        assert summary["orders"] == 1
+        assert len(client.orders) == 1
+        assert client.orders[0].size == 5.0
+
+    asyncio.run(run())
+
+
+def test_paper_order_skips_when_sell_liquidity_below_threshold() -> None:
+    async def run() -> None:
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            scanner=BookReversalScanner(yes_ask_size=2.0),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+        )
+
+        await engine.run_once()
+        summary = await engine.run_once()
+
+        assert summary["orders"] == 0
+        assert client.orders == []
+
+    asyncio.run(run())
+
+
+def test_paper_order_skips_when_best_ask_has_no_size() -> None:
+    async def run() -> None:
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            scanner=BookReversalScanner(yes_ask_size=100.0, include_asks=False),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+        )
+
+        await engine.run_once()
+        summary = await engine.run_once()
+
+        assert summary["orders"] == 0
+        assert client.orders == []
+
+    asyncio.run(run())
+
+
 def test_bot_engine_settles_expired_paper_market(tmp_path) -> None:  # type: ignore[no-untyped-def]
     async def run() -> None:
         trade_logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
@@ -271,6 +367,48 @@ def test_bot_engine_settles_expired_paper_market(tmp_path) -> None:  # type: ign
         assert engine.account.daily_pnl == 1.0
         assert any(event[0] == "market_resolved" for event in broadcaster.events)
         assert any(event[0] == "positions" for event in broadcaster.events)
+
+    asyncio.run(run())
+
+
+def test_bot_engine_settles_expired_trade_with_missing_target_from_slug(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        trade_logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
+        past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        trade_logger.log_trade_opened(
+            TradeRecord(
+                trade_id="yes",
+                market="m1",
+                asset="BTC",
+                side="YES",
+                entry_price=0.4,
+                size=10,
+                metadata={
+                    "end_date": past,
+                    "market_slug": "btc-updown-5m-1777225800",
+                    "paper": True,
+                    "price_to_beat": None,
+                    "timeframe": "5m",
+                },
+            )
+        )
+        broadcaster = FakeBroadcaster()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=TargetPriceClient(),
+            trade_logger=trade_logger,
+            broadcaster=broadcaster,
+            scanner=EmptyScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+        )
+
+        await engine.run_once()
+
+        yes = trade_logger.get_trade("yes")
+        assert yes is not None and yes.status == "RESOLVED" and yes.exit_price == 1.0 and yes.pnl == 6.0
+        assert trade_logger.list_positions() == []
+        assert any(event[0] == "market_resolved" for event in broadcaster.events)
 
     asyncio.run(run())
 
