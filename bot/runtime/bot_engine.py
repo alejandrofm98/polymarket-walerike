@@ -722,7 +722,7 @@ class BotEngine:
         if self.paper and self.price_feed is not None:
             tick = self._latest_tick(asset)
             if tick is not None:
-                from bot.core.chainlink_oracle import OraclePrice
+                from bot.data.price_aggregator import OraclePrice
                 import time
                 return OraclePrice(asset=asset.upper(), price=float(getattr(tick, "price", 0) or 0), round_id=0, updated_at=time.time(), stale=False)
         return None

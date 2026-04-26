@@ -72,7 +72,7 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
             if tick is not None and hasattr(tick, "price"):
                 market.current_price = float(tick.price)
                 if "PolymarketRTDS" in price_source:
-                    market.current_price_source = "polymarket_rtds_chainlink"
+                    market.current_price_source = "polymarket_rtds"
                 elif "Binance" in price_source:
                     market.current_price_source = "binance_live"
                 else:
@@ -82,7 +82,7 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
                 pass_synced_price = price_feed.latest.get(asset.upper())
                 if pass_synced_price and hasattr(pass_synced_price, "price"):
                     market.current_price = float(pass_synced_price.price)
-                    market.current_price_source = "polymarket_rtds_chainlink"
+                    market.current_price_source = "polymarket_rtds"
                 else:
                     market.current_price_source = "polymarket_rtds_pending"
             else:

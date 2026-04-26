@@ -51,13 +51,13 @@ Or:
 docker compose up --build
 ```
 
-Live trading is blocked unless both `--live`/`paper=False` and `POLYMARKET_LIVE_TRADING=1` are set. Do not put real private keys in source control. Positions use Polymarket Data API at `/positions?user=<proxy_wallet>` because `py-clob-client` has no positions method.
+Live trading is blocked unless both `--live`/`paper=False` and `POLYMARKET_LIVE_TRADING=1` are set. Do not put real private keys in source control. Positions use Polymarket Data API at `/positions?user=<funder>` because `py-clob-client` has no positions method.
 
 ## Module Status
 
 - `bot/core/polymarket_client.py`: paper-safe CLOB wrapper, public Gamma reads, public REST book reads, and websocket payload helpers.
 - `bot/core/binance_feed.py`: async Binance ticker feed for BTC/ETH/SOL with testable parse/update and momentum helpers.
-- `bot/core/chainlink_oracle.py`: lazy Chainlink reader with manual cache; `web3` only required for live oracle reads.
+- `bot/core/polymarket_rtds_feed.py`: async Polymarket RTDS crypto price feed.
 - `bot/core/risk_manager.py`: pure pre-trade risk checks and size adjustment.
 - `bot/core/hedge_strategy.py`: signal generation only; no order execution.
 - `bot/runtime/bot_engine.py`: async paper/live lifecycle runner behind API controls.

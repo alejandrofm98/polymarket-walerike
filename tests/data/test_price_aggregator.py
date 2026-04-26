@@ -3,8 +3,7 @@ from __future__ import annotations
 import pytest
 
 from bot.core.binance_feed import PriceTick
-from bot.core.chainlink_oracle import OraclePrice
-from bot.data.price_aggregator import PriceAggregator
+from bot.data.price_aggregator import OraclePrice, PriceAggregator
 
 
 def test_compare_computes_difference_and_alert() -> None:

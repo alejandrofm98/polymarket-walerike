@@ -84,37 +84,29 @@ def test_live_trading_guard_blocks_sdk_import_before_configured() -> None:
 
 
 def test_websocket_payload_builders_and_urls() -> None:
-    settings = Settings(
-        api_key="key",
-        api_secret="secret",
-        api_passphrase="passphrase",
-    )
+    settings = Settings(api_key="key")
     client = PolymarketClient(settings=settings, paper_mode=True)
 
     assert client.build_market_subscribe_payload(["token-a", "token-b"]) == {
         "type": "market",
         "assets_ids": ["token-a", "token-b"],
     }
-    assert client.build_user_subscribe_payload(["condition-a"]) == {
-        "type": "user",
-        "markets": ["condition-a"],
-        "auth": {"apiKey": "key", "secret": "secret", "passphrase": "passphrase"},
-    }
+    assert client.build_user_subscribe_payload(["condition-a"]) == {"type": "user", "markets": ["condition-a"], "auth": {"apiKey": "key"}}
     assert client._ws_url("market") == "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     assert client._ws_url("user") == "wss://ws-subscriptions-clob.polymarket.com/ws/user"
 
 
 def test_live_positions_use_data_api_not_sdk_positions() -> None:
     async def run() -> None:
-        settings = Settings(paper_mode=False, proxy_wallet="0xproxy")
+        settings = Settings(paper_mode=False, funder="0xfunder")
         client = PolymarketClient(settings=settings, paper_mode=False)
         client._clob_client = object()
 
         def fail_build() -> object:
             raise AssertionError("positions must not build or query py-clob-client")
 
-        def fake_fetch(proxy_wallet: str) -> list[dict[str, str]]:
-            assert proxy_wallet == "0xproxy"
+        def fake_fetch(funder: str) -> list[dict[str, str]]:
+            assert funder == "0xfunder"
             return [{"asset": "token-a"}]
 
         client._build_clob_client = fail_build  # type: ignore[method-assign]

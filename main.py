@@ -10,7 +10,6 @@ from bot.config.logging import configure_logging
 from bot.config.runtime_config import RuntimeConfigStore
 from bot.config.settings import Settings
 from bot.core.binance_feed import BinanceTickerFeed
-from bot.core.chainlink_oracle import ChainlinkOracle
 from bot.core.polymarket_client import PolymarketClient
 from bot.core.polymarket_rtds_feed import PolymarketRTDSFeed
 from bot.data.market_scanner import MarketScanner
@@ -25,7 +24,7 @@ def create_price_feed(settings: Settings) -> Any:
     """Create price feed based on PRICE_FEED_SOURCE config."""
     source = getattr(settings, "price_feed_source", "binance")
     
-    if source == "polymarket_rtds_chainlink":
+    if source == "polymarket_rtds":
         return PolymarketRTDSFeed(assets=list(settings.market_assets))
     elif source == "binance":
         return BinanceTickerFeed()
@@ -52,7 +51,6 @@ def build_services(settings: Settings) -> dict[str, Any]:
     broadcaster = WebSocketBroadcaster()
     price_feed = create_price_feed(settings)
     target_price_feed = create_target_price_feed(price_feed)
-    oracle = ChainlinkOracle(settings=settings)
     scanner = MarketScanner(client, settings.market_assets, settings.market_timeframes, runtime_config.enabled_markets)
     engine = BotEngine(
         settings=settings,
@@ -62,7 +60,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
         runtime_config_store=runtime_config_store,
         scanner=scanner,
         price_feed=price_feed,
-        oracle=oracle,
+        oracle=None,
         paper=settings.paper_mode,
         scan_interval=settings.scan_interval,
         realtime_interval=settings.realtime_interval,
@@ -76,7 +74,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
         "broadcaster": broadcaster,
         "price_feed": price_feed,
         "target_price_feed": target_price_feed,
-        "oracle": oracle,
+        "oracle": None,
         "market_scanner": scanner,
         "bot_engine": engine,
     }

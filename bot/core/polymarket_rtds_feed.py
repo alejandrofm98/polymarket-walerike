@@ -1,4 +1,4 @@
-"""Polymarket Real-Time Data Socket (RTDS) feed for crypto prices from Chainlink."""
+"""Polymarket Real-Time Data Socket (RTDS) feed for crypto prices."""
 
 from __future__ import annotations
 
@@ -37,14 +37,7 @@ class PriceTick:
 
 
 class PolymarketRTDSFeed:
-    """Polymarket RTDS feed for Chainlink crypto prices.
-    
-    Sources:
-    - crypto_prices: Binance source
-    - crypto_prices_chainlink: Chainlink source (preferred for reference)
-    
-    Supported symbols: btc/usd, eth/usd, sol/usd, xrp/usd
-    """
+    """Polymarket RTDS feed for crypto prices."""
 
     SYMBOL_MAP = {
         "BTC": "btc/usd",
@@ -158,7 +151,7 @@ class PolymarketRTDSFeed:
             "action": "subscribe",
             "subscriptions": [
                 {
-                    "topic": "crypto_prices_chainlink",
+                    "topic": "crypto_prices",
                     "type": "*",
                     "filters": f
                 }
@@ -230,7 +223,7 @@ class PolymarketRTDSFeed:
             
             topic = payload.get("topic", "")
             data = payload.get("payload", {})
-            if topic and topic not in {"crypto_prices_chainlink", "crypto_prices"}:
+            if topic and topic != "crypto_prices":
                 return None
 
             msg_type = payload.get("type")

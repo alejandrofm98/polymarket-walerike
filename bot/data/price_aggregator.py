@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from bot.core.binance_feed import PriceTick
-from bot.core.chainlink_oracle import OraclePrice
+
+
+@dataclass(slots=True)
+class OraclePrice:
+    asset: str
+    price: float
+    round_id: int | None
+    updated_at: float
+    stale: bool
 
 
 @dataclass(slots=True)

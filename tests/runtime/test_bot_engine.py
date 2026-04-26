@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from bot.config.settings import Settings
-from bot.core.chainlink_oracle import OraclePrice
 from bot.core.polymarket_client import OrderResponse
 from bot.data.market_scanner import MarketCandidate
+from bot.data.price_aggregator import OraclePrice
 from bot.data.trade_logger import TradeLogger, TradeRecord
 from bot.runtime import BotEngine
 

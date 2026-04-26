@@ -43,14 +43,13 @@ DEFAULT_POLYMARKET_USER_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/
 DEFAULT_POLYMARKET_DATA_API_URL = "https://data-api.polymarket.com"
 DEFAULT_POLYMARKET_GAMMA_API_URL = "https://gamma-api.polymarket.com"
 DEFAULT_CHAIN_ID = 137
-DEFAULT_CHAINLINK_STALE_SECONDS = 300
 DEFAULT_WEB_HOST = "127.0.0.1"
 DEFAULT_WEB_PORT = 8000
 DEFAULT_DATABASE_PATH = "data/trades.db"
 DEFAULT_FRONTEND_DIR = "frontend"
 DEFAULT_SCAN_INTERVAL = 10.0
 DEFAULT_REALTIME_INTERVAL = 0.2
-DEFAULT_PRICE_FEED_SOURCE = "polymarket_rtds_chainlink"
+DEFAULT_PRICE_FEED_SOURCE = "polymarket_rtds"
 
 
 @dataclass(slots=True)
@@ -66,18 +65,11 @@ class Settings:
     polymarket_data_api_url: str = DEFAULT_POLYMARKET_DATA_API_URL
     polymarket_gamma_api_url: str = DEFAULT_POLYMARKET_GAMMA_API_URL
     chain_id: int = DEFAULT_CHAIN_ID
+    external_wallet_address: str | None = None
     private_key: str | None = None
     api_key: str | None = None
-    api_secret: str | None = None
-    api_passphrase: str | None = None
-    proxy_wallet: str | None = None
     funder: str | None = None
     signature_type: int | None = None
-    chainlink_rpc_url: str | None = None
-    chainlink_btc_usd_feed: str | None = None
-    chainlink_eth_usd_feed: str | None = None
-    chainlink_sol_usd_feed: str | None = None
-    chainlink_stale_seconds: int = DEFAULT_CHAINLINK_STALE_SECONDS
     web_host: str = DEFAULT_WEB_HOST
     web_port: int = DEFAULT_WEB_PORT
     database_path: str = DEFAULT_DATABASE_PATH
@@ -86,15 +78,6 @@ class Settings:
     market_timeframes: tuple[str, ...] = ("5m", "15m", "1h")
     require_live_confirmation: bool = True
     price_feed_source: str = DEFAULT_PRICE_FEED_SOURCE
-
-    @property
-    def chainlink_feed_addresses(self) -> dict[str, str]:
-        feeds = {
-            "BTC": self.chainlink_btc_usd_feed,
-            "ETH": self.chainlink_eth_usd_feed,
-            "SOL": self.chainlink_sol_usd_feed,
-        }
-        return {asset: address for asset, address in feeds.items() if address}
 
     @classmethod
     def from_env(cls, load_dotenv: bool = True) -> "Settings":
@@ -114,18 +97,11 @@ class Settings:
             polymarket_data_api_url=os.getenv("POLYMARKET_DATA_API_URL", DEFAULT_POLYMARKET_DATA_API_URL),
             polymarket_gamma_api_url=os.getenv("POLYMARKET_GAMMA_API_URL", DEFAULT_POLYMARKET_GAMMA_API_URL),
             chain_id=int(os.getenv("POLYMARKET_CHAIN_ID", str(DEFAULT_CHAIN_ID))),
+            external_wallet_address=os.getenv("POLYMARKET_EXTERNAL_WALLET_ADDRESS") or None,
             private_key=os.getenv("POLYMARKET_PRIVATE_KEY") or None,
             api_key=os.getenv("POLYMARKET_API_KEY") or None,
-            api_secret=os.getenv("POLYMARKET_API_SECRET") or None,
-            api_passphrase=os.getenv("POLYMARKET_API_PASSPHRASE") or None,
-            proxy_wallet=os.getenv("POLYMARKET_PROXY_WALLET") or None,
             funder=os.getenv("POLYMARKET_FUNDER") or None,
             signature_type=int(signature_type) if signature_type else None,
-            chainlink_rpc_url=os.getenv("CHAINLINK_RPC_URL") or None,
-            chainlink_btc_usd_feed=os.getenv("CHAINLINK_BTC_USD_FEED") or None,
-            chainlink_eth_usd_feed=os.getenv("CHAINLINK_ETH_USD_FEED") or None,
-            chainlink_sol_usd_feed=os.getenv("CHAINLINK_SOL_USD_FEED") or None,
-            chainlink_stale_seconds=int(os.getenv("CHAINLINK_STALE_SECONDS", str(DEFAULT_CHAINLINK_STALE_SECONDS))),
             web_host=os.getenv("WEB_HOST", DEFAULT_WEB_HOST),
             web_port=int(os.getenv("WEB_PORT", str(DEFAULT_WEB_PORT))),
             database_path=os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH),

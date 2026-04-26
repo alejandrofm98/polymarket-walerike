@@ -181,11 +181,10 @@ class PolymarketClient:
     async def get_positions(self) -> Any:
         if self.paper_mode:
             return []
-        proxy_wallet = self.settings.proxy_wallet or self.settings.funder
-        if not proxy_wallet:
-            logger.warning("POLYMARKET_PROXY_WALLET or POLYMARKET_FUNDER required for positions Data API")
+        if not self.settings.funder:
+            logger.warning("POLYMARKET_FUNDER required for positions Data API")
             return []
-        return await self._call_sync(self._fetch_positions, proxy_wallet)
+        return await self._call_sync(self._fetch_positions, self.settings.funder)
 
     async def fetch_page_html(self, path_or_slug: str) -> str | None:
         """Fetch HTML page content for a Polymarket event/market slug."""
@@ -283,11 +282,7 @@ class PolymarketClient:
     def build_user_subscribe_payload(self, markets: list[str]) -> dict[str, Any]:
         payload: dict[str, Any] = {"type": "user", "markets": markets}
         if self.settings.api_key:
-            payload["auth"] = {
-                "apiKey": self.settings.api_key,
-                "secret": self.settings.api_secret,
-                "passphrase": self.settings.api_passphrase,
-            }
+            payload["auth"] = {"apiKey": self.settings.api_key}
         return payload
 
     def register_callback(self, callback: EventCallback) -> None:
@@ -320,14 +315,7 @@ class PolymarketClient:
         if self.settings.signature_type is not None:
             kwargs["signature_type"] = self.settings.signature_type
         client = client_module.ClobClient(**kwargs)
-        if self.settings.api_key and self.settings.api_secret and self.settings.api_passphrase:
-            creds = self._sdk["ApiCreds"](
-                api_key=self.settings.api_key,
-                api_secret=self.settings.api_secret,
-                api_passphrase=self.settings.api_passphrase,
-            )
-            client.set_api_creds(creds)
-        elif self.settings.live_trading and self.settings.private_key and hasattr(client, "create_or_derive_api_creds"):
+        if self.settings.live_trading and self.settings.private_key and hasattr(client, "create_or_derive_api_creds"):
             client.set_api_creds(client.create_or_derive_api_creds())
         return client
 
@@ -373,8 +361,8 @@ class PolymarketClient:
             return base
         return f"{base}/{channel}"
 
-    def _fetch_positions(self, proxy_wallet: str) -> Any:
-        query = urllib.parse.urlencode({"user": proxy_wallet})
+    def _fetch_positions(self, funder: str) -> Any:
+        query = urllib.parse.urlencode({"user": funder})
         url = f"{self.settings.polymarket_data_api_url.rstrip('/')}/positions?{query}"
         with urllib.request.urlopen(url, timeout=15) as response:  # noqa: S310 - endpoint configurable for tests
             return self._json_loads(response.read())

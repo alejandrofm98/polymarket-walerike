@@ -77,7 +77,7 @@ def _update_spot_fields(market: Any, scanner: Any, price_feed: Any) -> None:
         market.current_price = current_price
 
         if "PolymarketRTDS" in price_source:
-            market.current_price_source = "polymarket_rtds_chainlink"
+            market.current_price_source = "polymarket_rtds"
         elif "Binance" in price_source:
             market.current_price_source = "binance_live"
         else:
@@ -98,7 +98,7 @@ def _refresh_computed_fields(market: Any) -> None:
 def _historical_source_label(price_feed: Any) -> str:
     price_source = type(price_feed).__name__ if price_feed is not None else "Unknown"
     if "PolymarketRTDS" in price_source:
-        return "polymarket_rtds_chainlink"
+        return "polymarket_rtds"
     if "Binance" in price_source:
         return "binance_historical_window_start"
     return "unknown"
@@ -372,8 +372,7 @@ async def _realtime_market_loop(
             except Exception as exc:
                 logger.warning("Crypto price API target fetch failed for {}: {}", market.asset, exc)
 
-            # 2) Scrape Polymarket page as fallback — gets the exact openPrice used
-            #    for resolution (Chainlink oracle value at window start).
+            # 2) Scrape Polymarket page as fallback to get the exact openPrice used for resolution.
             if target_price is None and client is not None and hasattr(client, "fetch_page_html"):
                 slug = getattr(market, "event_slug", None) or getattr(market, "slug", None) or getattr(market, "market_slug", None)
                 if slug:
