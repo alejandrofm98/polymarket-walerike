@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/Header";
 import { Sidebar } from "@/components/Sidebar";
 import { MarketsView } from "@/components/markets/MarketsView";
+import { AccountView } from "@/components/AccountView";
 import { SettingsView } from "@/components/SettingsView";
 import { LogsView } from "@/components/LogsView";
 import { api } from "@/lib/utils2";
@@ -13,6 +14,7 @@ import type {
   Market,
   Trade,
   Position,
+  AccountSummary,
   WsEvent,
 } from "@/types";
 
@@ -36,8 +38,10 @@ function App() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [account, setAccount] = useState<AccountSummary | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
+  const [loadingAccount, setLoadingAccount] = useState(false);
   const [busyControl, setBusyControl] = useState(false);
   const reconnectMs = useRef(500);
   const fallbackPoll = useRef<number | null>(null);
@@ -81,6 +85,17 @@ function App() {
 
   async function refreshPositions() {
     setPositions(await api<Position[]>("/api/positions"));
+  }
+
+  async function refreshAccount() {
+    setLoadingAccount(true);
+    try {
+      setAccount(await api<AccountSummary>("/api/account"));
+    } catch (error) {
+      log(`account: ${(error as Error).message}`);
+    } finally {
+      setLoadingAccount(false);
+    }
   }
 
   async function refreshMarkets() {
@@ -159,6 +174,7 @@ function App() {
       refreshConfig(),
       refreshTrades(),
       refreshPositions(),
+      refreshAccount(),
       refreshMarkets(),
     ]).then((results) => {
       for (const result of results) {
@@ -166,6 +182,12 @@ function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (activeView === "account" && account === null && !loadingAccount) {
+      refreshAccount();
+    }
+  }, [activeView, account, loadingAccount]);
 
   useEffect(() => {
     let closed = false;
@@ -290,6 +312,9 @@ function App() {
               onClearPositions={clearPositions}
               onClearTradeHistory={clearTradeHistory}
             />
+          )}
+          {activeView === "account" && (
+            <AccountView account={account} loading={loadingAccount} onRefresh={refreshAccount} />
           )}
           {activeView === "settings" && (
             <SettingsView

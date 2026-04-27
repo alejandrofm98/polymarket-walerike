@@ -188,6 +188,29 @@ class PolymarketClient:
             return []
         return await self._call_sync(self._fetch_positions, self.settings.funder)
 
+    async def get_account_balances(self) -> dict[str, Any]:
+        if self.paper_mode:
+            return {"available": False, "reason": "live account data requires live mode"}
+        client = self._require_clob_client()
+        if not hasattr(client, "get_balance_allowance"):
+            return {"available": False, "reason": "CLOB client does not expose balance reads"}
+        raw = await self._call_sync(client.get_balance_allowance, self._balance_allowance_params())
+        data = raw if isinstance(raw, dict) else {"raw": raw}
+        return {
+            "available": True,
+            "cash_balance": self._usdc_amount(data.get("balance")),
+            "allowance": self._usdc_amount(data.get("allowance")),
+            "raw": data,
+        }
+
+    async def get_account_trades(self) -> list[dict[str, Any]]:
+        if self.paper_mode:
+            return []
+        raw = await self.get_trades()
+        if not isinstance(raw, list):
+            return []
+        return [self._normalize_account_trade(item) for item in raw if isinstance(item, dict)]
+
     async def fetch_page_html(self, path_or_slug: str) -> str | None:
         """Fetch HTML page content for a Polymarket event/market slug."""
         clean_slug = path_or_slug.strip().rstrip("/").split("/")[-1]
@@ -303,6 +326,7 @@ class PolymarketClient:
             raise RuntimeError("Live mode requires optional package py-clob-client") from exc
         self._sdk = {
             "ApiCreds": types_module.ApiCreds,
+            "BalanceAllowanceParams": getattr(types_module, "BalanceAllowanceParams", None),
             "OrderArgs": types_module.OrderArgs,
             "OrderType": types_module.OrderType,
             "OpenOrderParams": types_module.OpenOrderParams,
@@ -450,8 +474,26 @@ class PolymarketClient:
     def _fetch_positions(self, funder: str) -> Any:
         query = urllib.parse.urlencode({"user": funder})
         url = f"{self.settings.polymarket_data_api_url.rstrip('/')}/positions?{query}"
-        with urllib.request.urlopen(url, timeout=15) as response:  # noqa: S310 - endpoint configurable for tests
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (compatible; polymarket-walerike/0.1)",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - endpoint configurable for tests
             return self._json_loads(response.read())
+
+    def _balance_allowance_params(self) -> Any:
+        params_cls = self._sdk.get("BalanceAllowanceParams")
+        if params_cls is None:
+            try:
+                params_cls = getattr(importlib.import_module("py_clob_client.clob_types"), "BalanceAllowanceParams")
+            except (ImportError, AttributeError):
+                params_cls = None
+        if params_cls is None:
+            return {"asset_type": "COLLATERAL"}
+        return params_cls(asset_type="COLLATERAL")
 
     def _fetch_json_url(self, url: str) -> Any:
         try:
@@ -587,6 +629,35 @@ class PolymarketClient:
             value = value.decode("utf-8")
         parsed = json.loads(value)
         return parsed
+
+    @staticmethod
+    def _float_or_none(value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _usdc_amount(cls, value: Any) -> float | None:
+        amount = cls._float_or_none(value)
+        if amount is None:
+            return None
+        return amount / 1_000_000 if amount > 10_000 else amount
+
+    @classmethod
+    def _normalize_account_trade(cls, item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(item.get("id") or item.get("trade_id") or item.get("transactionHash") or ""),
+            "market": str(item.get("market") or item.get("conditionId") or item.get("condition_id") or ""),
+            "side": str(item.get("side") or item.get("takerSide") or ""),
+            "size": cls._float_or_none(item.get("size") or item.get("amount")),
+            "price": cls._float_or_none(item.get("price")),
+            "fee": cls._float_or_none(item.get("fee") or item.get("feeAmount")),
+            "timestamp": cls._float_or_none(item.get("timestamp") or item.get("createdAt")),
+            "raw": item,
+        }
 
 
 async def paper_smoke() -> None:

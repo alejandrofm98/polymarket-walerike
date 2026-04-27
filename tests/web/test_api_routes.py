@@ -226,3 +226,52 @@ def test_api_markets_scans_and_fetches_slug() -> None:
         markets = client.get("/api/markets").json()
         assert markets == [{"asset": "BTC", "timeframe": "5m", "slug": "btc-updown-5m-1777069800"}]
         assert client.get("/api/markets/slug/btc-updown-5m-1777069800").json()["asset"] == "BTC"
+
+
+class FakeAccountClient:
+    def __init__(self) -> None:
+        self.paper_mode = False
+
+    async def get_account_balances(self) -> dict[str, object]:
+        return {"available": True, "cash_balance": 12.5, "allowance": 99.0, "raw": {}}
+
+    async def get_positions(self) -> list[dict[str, object]]:
+        return [{"market": "m1", "asset": "BTC", "side": "YES", "size": 10, "avg_price": 0.4, "currentValue": 4.5, "cashPnl": 0.5}]
+
+    async def get_account_trades(self) -> list[dict[str, object]]:
+        return [{"id": "t1", "market": "m1", "side": "BUY", "size": 10, "price": 0.4, "fee": 0.01, "timestamp": 1777320000.0}]
+
+
+class FailingAccountClient(FakeAccountClient):
+    async def get_account_balances(self) -> dict[str, object]:
+        raise RuntimeError("balance failed")
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_account_returns_live_summary() -> None:
+    app = create_app(Settings(paper_mode=False, live_trading=True), {"polymarket_client": FakeAccountClient(), "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        payload = client.get("/api/account").json()
+
+    assert payload["available"] is True
+    assert payload["mode"] == "live"
+    assert payload["cash_balance"] == 12.5
+    assert payload["portfolio_value"] == 4.5
+    assert payload["unrealized_pnl"] == 0.5
+    assert payload["positions"][0]["asset"] == "BTC"
+    assert payload["trades"][0]["id"] == "t1"
+    assert payload["errors"] == []
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_account_returns_partial_errors() -> None:
+    app = create_app(Settings(paper_mode=False, live_trading=True), {"polymarket_client": FailingAccountClient(), "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        payload = client.get("/api/account").json()
+
+    assert payload["available"] is True
+    assert payload["cash_balance"] is None
+    assert payload["positions"][0]["asset"] == "BTC"
+    assert payload["errors"] == [{"source": "balances", "message": "balance failed"}]

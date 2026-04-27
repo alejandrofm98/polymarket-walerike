@@ -1,4 +1,4 @@
-export type View = "markets" | "settings" | "logs";
+export type View = "markets" | "account" | "settings" | "logs";
 
 export type Runtime = {
   status?: string;
@@ -87,4 +87,50 @@ export type Position = {
 export type WsEvent = {
   type: string;
   payload: Record<string, any>;
+};
+
+export type AccountError = {
+  source: string;
+  message: string;
+};
+
+export type AccountPosition = Record<string, any> & {
+  market?: string;
+  asset?: string;
+  side?: string;
+  size?: number;
+  avg_price?: number;
+  avgPrice?: number;
+  currentValue?: number;
+  current_value?: number;
+  value?: number;
+  cashPnl?: number;
+  unrealized_pnl?: number;
+  pnl?: number;
+};
+
+export type AccountTrade = Record<string, any> & {
+  id?: string;
+  market?: string;
+  side?: string;
+  size?: number;
+  price?: number;
+  fee?: number;
+  timestamp?: number;
+  realized_pnl?: number;
+  pnl?: number;
+};
+
+export type AccountSummary = {
+  available: boolean;
+  mode: "paper" | "live" | "unavailable";
+  reason?: string | null;
+  cash_balance?: number | null;
+  allowance?: number | null;
+  portfolio_value?: number | null;
+  realized_pnl?: number | null;
+  unrealized_pnl?: number | null;
+  positions: AccountPosition[];
+  trades: AccountTrade[];
+  errors: AccountError[];
 };

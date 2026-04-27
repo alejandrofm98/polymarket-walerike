@@ -166,6 +166,26 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
             return asdict(candidate)
         return dict(candidate) if isinstance(candidate, dict) else {"value": candidate}
 
+    def _num(value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _sum_first(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> float | None:
+        total = 0.0
+        found = False
+        for row in rows:
+            for key in keys:
+                value = _num(row.get(key))
+                if value is not None:
+                    total += value
+                    found = True
+                    break
+        return total if found else None
+
     @router.get("/health")
     async def health() -> dict[str, Any]:
         runtime_payload = engine.status() if engine is not None and hasattr(engine, "status") else asdict(runtime)
@@ -182,6 +202,64 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
             base = {"runtime": runtime_payload, **mode_status}
         base["price_feed"] = pf_status
         return base
+
+    @router.get("/account")
+    async def account() -> dict[str, Any]:
+        client = services.get("polymarket_client") or getattr(engine, "client", None)
+        runtime_payload = engine.status() if engine is not None and hasattr(engine, "status") else asdict(runtime)
+        is_paper = bool(runtime_payload.get("paper_mode", settings.paper_mode))
+        unavailable_payload = {
+            "cash_balance": None,
+            "portfolio_value": None,
+            "realized_pnl": None,
+            "unrealized_pnl": None,
+            "positions": [],
+            "trades": [],
+            "errors": [],
+        }
+        if client is None:
+            return {"available": False, "mode": "unavailable", "reason": "polymarket client unavailable", **unavailable_payload}
+        if is_paper:
+            return {"available": False, "mode": "paper", "reason": "live account data requires live mode", **unavailable_payload}
+
+        errors: list[dict[str, str]] = []
+        balances: dict[str, Any] = {}
+        positions: list[dict[str, Any]] = []
+        trades: list[dict[str, Any]] = []
+
+        try:
+            if hasattr(client, "get_account_balances"):
+                balances = await client.get_account_balances()
+        except Exception as exc:  # noqa: BLE001 - account screen supports partial failures
+            errors.append({"source": "balances", "message": str(exc)})
+
+        try:
+            if hasattr(client, "get_positions"):
+                raw_positions = await client.get_positions()
+                positions = [dict(item) for item in raw_positions if isinstance(item, dict)] if isinstance(raw_positions, list) else []
+        except Exception as exc:  # noqa: BLE001 - account screen supports partial failures
+            errors.append({"source": "positions", "message": str(exc)})
+
+        try:
+            if hasattr(client, "get_account_trades"):
+                raw_trades = await client.get_account_trades()
+                trades = [dict(item) for item in raw_trades if isinstance(item, dict)] if isinstance(raw_trades, list) else []
+        except Exception as exc:  # noqa: BLE001 - account screen supports partial failures
+            errors.append({"source": "trades", "message": str(exc)})
+
+        return {
+            "available": True,
+            "mode": "live",
+            "reason": None,
+            "cash_balance": balances.get("cash_balance"),
+            "allowance": balances.get("allowance"),
+            "portfolio_value": _sum_first(positions, ("currentValue", "current_value", "value")),
+            "realized_pnl": _sum_first(trades, ("realized_pnl", "pnl")),
+            "unrealized_pnl": _sum_first(positions, ("cashPnl", "unrealized_pnl", "pnl")),
+            "positions": positions,
+            "trades": trades,
+            "errors": errors,
+        }
 
     @router.get("/config")
     async def get_config() -> dict[str, Any]:

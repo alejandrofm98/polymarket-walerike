@@ -195,6 +195,34 @@ def test_live_positions_use_data_api_not_sdk_positions() -> None:
     asyncio.run(run())
 
 
+def test_live_positions_data_api_uses_browser_json_headers(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    seen_headers: dict[str, str] = {}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps([{ "asset": "token-a" }]).encode()
+
+    def fake_urlopen(request: object, timeout: int) -> FakeResponse:
+        assert timeout == 15
+        assert str(getattr(request, "full_url", "")) == "https://data.example/positions?user=0xfunder"
+        seen_headers.update(dict(getattr(request, "headers", {})))
+        return FakeResponse()
+
+    monkeypatch.setattr(polymarket_client_module.urllib.request, "urlopen", fake_urlopen)
+    settings = Settings(paper_mode=False, polymarket_data_api_url="https://data.example")
+    client = PolymarketClient(settings=settings, paper_mode=False)
+
+    assert client._fetch_positions("0xfunder") == [{"asset": "token-a"}]
+    assert seen_headers["Accept"] == "application/json"
+    assert "User-agent" in seen_headers
+
+
 def test_gamma_fetch_builds_public_urls_in_paper_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     async def run() -> None:
         seen_urls: list[str] = []
@@ -323,5 +351,92 @@ def test_clob_book_fetches_public_urls_in_paper_mode(monkeypatch) -> None:  # ty
         assert seen[0][1] == "POST"
         assert json.loads(seen[0][2].decode()) == [{"token_id": "token-a"}]
         assert seen[1][0] == "https://clob.example/book?token_id=token-a"
+
+    asyncio.run(run())
+
+
+def test_paper_account_reads_are_empty() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=True), paper_mode=True)
+
+        assert await client.get_account_balances() == {"available": False, "reason": "live account data requires live mode"}
+        assert await client.get_account_trades() == []
+
+    asyncio.run(run())
+
+
+def test_live_account_balances_use_clob_client_methods() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+
+        @dataclass
+        class FakeBalanceAllowanceParams:
+            asset_type: str
+            signature_type: int = -1
+
+        class FakeClob:
+            def get_balance_allowance(self, params):  # type: ignore[no-untyped-def]
+                assert not isinstance(params, dict)
+                assert params.asset_type == "COLLATERAL"
+                assert params.signature_type == -1
+                return {"balance": "1200000", "allowance": "3400000"}
+
+        client._sdk = {"BalanceAllowanceParams": FakeBalanceAllowanceParams}
+        client._clob_client = FakeClob()
+
+        assert await client.get_account_balances() == {
+            "available": True,
+            "cash_balance": 1.2,
+            "allowance": 3.4,
+            "raw": {"balance": "1200000", "allowance": "3400000"},
+        }
+
+    asyncio.run(run())
+
+
+def test_live_account_balances_falls_back_to_imported_params(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+
+        @dataclass
+        class FakeBalanceAllowanceParams:
+            asset_type: str
+            signature_type: int = -1
+
+        class FakeClobTypes:
+            BalanceAllowanceParams = FakeBalanceAllowanceParams
+
+        class FakeClob:
+            def get_balance_allowance(self, params):  # type: ignore[no-untyped-def]
+                assert params.asset_type == "COLLATERAL"
+                assert params.signature_type == -1
+                return {"balance": "1200000", "allowance": "3400000"}
+
+        def fake_import_module(name: str) -> object:
+            if name == "py_clob_client.clob_types":
+                return FakeClobTypes
+            raise AssertionError(name)
+
+        monkeypatch.setattr(polymarket_client_module.importlib, "import_module", fake_import_module)
+        client._clob_client = FakeClob()
+
+        assert (await client.get_account_balances())["cash_balance"] == 1.2
+
+    asyncio.run(run())
+
+
+def test_live_account_trades_normalizes_sdk_payload() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+
+        class FakeClob:
+            def get_trades(self):  # type: ignore[no-untyped-def]
+                return [{"id": "t1", "market": "m1", "side": "BUY", "size": "10", "price": "0.42", "fee": "0.01", "timestamp": "1777320000"}]
+
+        client._clob_client = FakeClob()
+
+        assert await client.get_account_trades() == [
+            {"id": "t1", "market": "m1", "side": "BUY", "size": 10.0, "price": 0.42, "fee": 0.01, "timestamp": 1777320000.0, "raw": {"id": "t1", "market": "m1", "side": "BUY", "size": "10", "price": "0.42", "fee": "0.01", "timestamp": "1777320000"}},
+        ]
 
     asyncio.run(run())

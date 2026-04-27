@@ -139,6 +139,9 @@ export const Header = memo(function Header({
         <NavTab active={activeView === "markets"} onClick={() => onViewChange("markets")}>
           Markets
         </NavTab>
+        <NavTab active={activeView === "account"} onClick={() => onViewChange("account")}>
+          Account
+        </NavTab>
         <NavTab active={activeView === "settings"} onClick={() => onViewChange("settings")}>
           Settings
         </NavTab>
