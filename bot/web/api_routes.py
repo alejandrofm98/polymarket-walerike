@@ -146,7 +146,8 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         slug_key = f"{asset}:{getattr(market, 'timeframe', '')}:{getattr(market, 'event_slug', '') or getattr(market, 'slug', '')}"
         window_ts = getattr(market, "window_start_timestamp", None)
         
-        if window_ts is not None:
+        if window_ts is not None and window_ts > 0:
+            slug_key = f"{slug_key}:{int(window_ts)}"
             target_cache_key = f"target:{slug_key}"
             if hasattr(scanner, "_target_price_for_slug"):
                 stored = scanner._target_price_for_slug.get(target_cache_key)
@@ -276,20 +277,11 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
     async def export_trades_csv() -> Any:
         return await export_trades()
 
-    @router.post("/trades/clear-open-paper")
-    async def clear_open_paper_trades() -> dict[str, Any]:
-        if trade_logger is None or not hasattr(trade_logger, "cancel_open_paper_trades"):
-            return {"ok": False, "cleared": 0, "trades": [], "error": "trade logger unavailable"}
-
-        cancelled = trade_logger.cancel_open_paper_trades()
-        positions = []
-        if hasattr(trade_logger, "list_positions"):
-            positions = [asdict(record) for record in trade_logger.list_positions()]
-        if engine is not None and hasattr(engine, "_publish"):
-            await engine._publish("positions", {"positions": positions})
-            if hasattr(engine, "status"):
-                await engine._publish("bot_status", engine.status())
-        return {"ok": True, "cleared": len(cancelled), "trades": [asdict(record) for record in cancelled], "positions": positions}
+    @router.post("/trades/clear-open-positions")
+    async def clear_open_positions() -> dict[str, Any]:
+        if engine is not None and hasattr(engine, "clear_open_positions"):
+            return await engine.clear_open_positions()
+        return {"ok": False, "cleared": 0, "positions": [], "error": "engine unavailable"}
 
     @router.post("/trades/clear")
     async def clear_trades() -> dict[str, Any]:

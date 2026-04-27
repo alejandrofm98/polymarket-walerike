@@ -100,12 +100,9 @@ class TradeLogger:
     def log_trade_resolved(self, trade_id: str, exit_price: float, pnl: float | None = None) -> TradeRecord | None:
         return self.log_trade_closed(trade_id, exit_price=exit_price, status="RESOLVED", pnl=pnl)
 
-    def cancel_open_paper_trades(self) -> list[TradeRecord]:
+    def cancel_open_positions(self) -> list[TradeRecord]:
         cancelled: list[TradeRecord] = []
         for trade in self.list_trades(status="OPEN"):
-            metadata = trade.metadata or {}
-            if metadata.get("paper") is not True:
-                continue
             closed = self.log_trade_closed(trade.trade_id, exit_price=trade.entry_price, status="CANCELLED", pnl=0.0)
             if closed is not None:
                 cancelled.append(closed)

@@ -39,7 +39,7 @@ class BotEngine:
         risk_manager: RiskManager | None = None,
         strategy: HedgeStrategy | None = None,
         paper: bool | None = None,
-        scan_interval: float = 10.0,
+        scan_interval: float = 0.1,
         realtime_interval: float = 0.5,
         capital_per_trade: float = 10.0,
         initial_balance: float = 1_000.0,
@@ -79,6 +79,10 @@ class BotEngine:
         self._realtime_task: asyncio.Task[None] = None
         self._connected = False
         self._active_markets: list = []
+        self._cached_markets: list = []
+        self._last_scan_at: float = 0.0
+        self.SCAN_CACHE_DURATION: float = 10.0
+        self._first_window_seen: dict[str, int] = {}
         self.logger = logging.getLogger("walerike.bot_engine")
         self._apply_runtime_config()
 
@@ -206,14 +210,17 @@ class BotEngine:
         self.ticks += 1
         self._apply_runtime_config()
         summary = {"scanned": 0, "evaluated": 0, "orders": 0, "skipped": 0}
-        try:
-            markets = await self.scanner.scan()
-        except Exception as exc:  # noqa: BLE001 - runtime must stay alive
-            self.last_error = str(exc)
-            await self._log_event(f"scan failed: {self.last_error}", level="error")
-            await self._publish("bot_error", {"error": self.last_error})
-            return summary
-
+        now = time.time()
+        if now - self._last_scan_at >= self.SCAN_CACHE_DURATION:
+            try:
+                self._cached_markets = await self.scanner.scan()
+                self._last_scan_at = now
+            except Exception as exc:  # noqa: BLE001 - runtime must stay alive
+                self.last_error = str(exc)
+                await self._log_event(f"scan failed: {self.last_error}", level="error")
+                await self._publish("bot_error", {"error": self.last_error})
+                return summary
+        markets = self._cached_markets
         summary["scanned"] = len(markets)
         self._active_markets = markets
         for market in markets:
@@ -237,6 +244,8 @@ class BotEngine:
             summary["evaluated"] += 1
             result = await self._evaluate_and_order(snapshot)
             summary["orders"] += result
+            if result > 0:
+                break
         await self._publish("bot_tick", summary)
         await self._log_event(f"tick scanned={summary['scanned']} evaluated={summary['evaluated']} orders={summary['orders']} skipped={summary['skipped']}")
         return summary
@@ -292,6 +301,16 @@ class BotEngine:
             with contextlib.suppress(Exception):
                 await self.client.close()
         self._connected = False
+
+    async def clear_open_positions(self) -> dict[str, Any]:
+        self.account.positions_by_market.clear()
+        self.account.total_exposure = 0.0
+        self.account.open_trade_keys.clear()
+        if self.trade_logger is not None and hasattr(self.trade_logger, "cancel_open_positions"):
+            self.trade_logger.cancel_open_positions()
+        await self._log_event("all open positions cleared")
+        await self._publish("positions", {"positions": []})
+        return {"cleared": True, "positions": []}
 
     async def _loop(self) -> None:
         try:
@@ -413,8 +432,8 @@ class BotEngine:
         if not token_id:
             await self._log_event(f"[SKIP] {label} leg: missing token_id")
             return 0
-        if size < 1:
-            await self._log_event(f"[SKIP] {label} leg: size {size:.2f} below minimum 1")
+        if size < 0.01:
+            await self._log_event(f"[SKIP] {label} leg: size {size:.2f} below minimum 0.01")
             return 0
         if self.paper and side is OrderSide.BUY:
             available = snapshot.yes_liquidity if label == "YES" else snapshot.no_liquidity
@@ -698,14 +717,24 @@ class BotEngine:
             await self._publish("positions", {"positions": self._positions_payload()})
             await self._publish("bot_status", self.status())
 
+    def _is_first_window_for_market(self, asset: str, timeframe: str, window_start: int) -> bool:
+        key = f"{asset}:{timeframe}"
+        if key not in self._first_window_seen:
+            self._first_window_seen[key] = window_start
+            return True
+        return self._first_window_seen[key] == window_start
+
     async def _target_price_for_snapshot(self, snapshot: MarketSnapshot) -> float | None:
         if snapshot.price_to_beat is not None:
             return float(snapshot.price_to_beat)
+        window_ts = snapshot.window_start_timestamp
+        is_first = self._is_first_window_for_market(snapshot.asset, snapshot.timeframe, window_ts) if window_ts else False
         price, window_start = await self._resolve_target_price(
             snapshot.asset,
             snapshot.timeframe,
             snapshot.market_slug,
             snapshot.window_start_timestamp,
+            is_first_window=is_first,
         )
         if price is not None:
             snapshot.price_to_beat = price
@@ -714,11 +743,15 @@ class BotEngine:
         return price
 
     async def _target_price_for_metadata(self, asset: str, metadata: dict[str, Any]) -> float | None:
+        window_ts = self._int_or_none(metadata.get("window_start_timestamp"))
+        timeframe = str(metadata.get("timeframe") or "")
+        is_first = self._is_first_window_for_market(asset, timeframe, window_ts) if window_ts else False
         price, window_start = await self._resolve_target_price(
             asset,
-            str(metadata.get("timeframe") or ""),
+            timeframe,
             str(metadata.get("market_slug") or "") or None,
-            self._int_or_none(metadata.get("window_start_timestamp")),
+            window_ts,
+            is_first_window=is_first,
         )
         if price is not None:
             metadata["price_to_beat"] = price
@@ -726,7 +759,7 @@ class BotEngine:
             metadata["window_start_timestamp"] = window_start
         return price
 
-    async def _resolve_target_price(self, asset: str, timeframe: str | None, slug: str | None, window_start: int | None) -> tuple[float | None, int | None]:
+    async def _resolve_target_price(self, asset: str, timeframe: str | None, slug: str | None, window_start: int | None, is_first_window: bool = False) -> tuple[float | None, int | None]:
         slug_window = self._window_start_from_slug(slug)
         window_start = window_start or slug_window
         if window_start is None:
@@ -736,7 +769,7 @@ class BotEngine:
         if price is not None:
             return price, window_start
 
-        if slug and hasattr(self.client, "fetch_page_html"):
+        if is_first_window and slug and hasattr(self.client, "fetch_page_html"):
             with contextlib.suppress(Exception):
                 html = await self.client.fetch_page_html(slug)
                 from bot.web.server import _scrape_target_price_from_html
@@ -984,7 +1017,6 @@ class BotEngine:
                 self.strategy.config.entry_threshold = float(config.entry_threshold)
                 self.strategy.config.max_sum_avg = float(config.max_sum_avg)
                 self.strategy.config.max_buys_per_side = int(config.max_buys_per_side)
-                self.strategy.config.shares_per_order = float(config.shares_per_order)
                 self.strategy.config.reversal_delta = float(config.reversal_delta)
                 self.strategy.config.depth_buy_discount_percent = float(config.depth_buy_discount_percent)
                 self.strategy.config.second_side_buffer = float(config.second_side_buffer)

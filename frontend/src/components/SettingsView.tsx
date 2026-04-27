@@ -89,17 +89,6 @@ export function SettingsView({ config, runtime, setConfig, onSubmit, onEnabledMa
                 className="border-white/10 bg-white/[0.03] font-mono"
               />
             </SettingField>
-            <SettingField label="Shares per order">
-              <Input
-                type="number"
-                min="1"
-                step="1"
-                value={config.shares_per_order}
-                onChange={(e) => setNumber("shares_per_order", e.target.value)}
-                className="border-white/10 bg-white/[0.03] font-mono"
-              />
-            </SettingField>
-
             {/* Trading mode */}
             <div className={cn(
               "rounded-xl border p-4 sm:col-span-2",

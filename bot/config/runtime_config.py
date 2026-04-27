@@ -20,7 +20,7 @@ class RuntimeConfig:
     entry_threshold: float = 0.499
     max_sum_avg: float = 0.98
     max_buys_per_side: int = 4
-    shares_per_order: float = 5.0
+    
     reversal_delta: float = 0.02
     depth_buy_discount_percent: float = 0.05
     second_side_buffer: float = 0.01
@@ -70,7 +70,6 @@ def validate_runtime_config(config: RuntimeConfig) -> None:
     config.entry_threshold = _float_range("entry_threshold", config.entry_threshold, minimum=0.01, maximum=0.99)
     config.max_sum_avg = _float_range("max_sum_avg", config.max_sum_avg, minimum=0.01, maximum=1.0)
     config.max_buys_per_side = int(_float_range("max_buys_per_side", config.max_buys_per_side, minimum=1.0, maximum=100.0))
-    config.shares_per_order = _float_range("shares_per_order", config.shares_per_order, minimum=1.0, maximum=1_000_000.0)
     config.reversal_delta = _float_range("reversal_delta", config.reversal_delta, minimum=0.0, maximum=1.0)
     config.depth_buy_discount_percent = _float_range("depth_buy_discount_percent", config.depth_buy_discount_percent, minimum=0.0, maximum=1.0)
     config.second_side_buffer = _float_range("second_side_buffer", config.second_side_buffer, minimum=0.0, maximum=1.0)

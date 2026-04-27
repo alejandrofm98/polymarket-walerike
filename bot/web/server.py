@@ -46,7 +46,9 @@ def _apply_cached_target(market: Any, scanner: Any) -> None:
         return
     timeframe = getattr(market, "timeframe", "")
     event_slug = getattr(market, "event_slug", "") or getattr(market, "slug", "") or ""
-    slug_key = f"{asset}:{timeframe}:{event_slug}"
+    window_ts = getattr(market, "window_start_timestamp", None)
+    window_key = f":{int(window_ts)}" if window_ts is not None and window_ts > 0 else ""
+    slug_key = f"{asset}:{timeframe}:{event_slug}{window_key}"
     target_cache_key = f"target:{slug_key}"
     if not hasattr(scanner, "_target_price_for_slug"):
         scanner._target_price_for_slug = {}
@@ -55,7 +57,6 @@ def _apply_cached_target(market: Any, scanner: Any) -> None:
         market.price_to_beat = stored.get("price")
         market.target_price_source = stored.get("source", "window_start")
     else:
-        window_ts = getattr(market, "window_start_timestamp", None)
         if window_ts is not None and window_ts > 0 and getattr(market, "price_to_beat", None) is None:
             market.target_price_source = "no_data"
 
@@ -373,6 +374,7 @@ async def _realtime_market_loop(
     active_markets: list[Any] = []
     subscribed_tokens: set[str] = set()
     target_fetched: dict[str, tuple[bool, float]] = {}  # (fetched_flag, last_attempt_ts)
+    first_window_seen: dict[str, int] = {}  # track first window seen per market (asset:timeframe -> window_ts)
 
     async def handle_market_ws(event: Any) -> None:
         payload = getattr(event, "payload", None)
@@ -385,7 +387,12 @@ async def _realtime_market_loop(
             _apply_cached_target(market, scanner)
             return
 
-        slug_key = f"{market.asset}:{market.timeframe}:{market.event_slug or market.slug or ''}"
+        market_key = f"{market.asset}:{market.timeframe}"
+        is_first_window = market_key not in first_window_seen
+        if is_first_window:
+            first_window_seen[market_key] = window_ts
+
+        slug_key = f"{market.asset}:{market.timeframe}:{market.event_slug or market.slug or ''}:{int(window_ts)}"
         target_cache_key = f"target:{slug_key}"
         now = time.time()
 
@@ -426,17 +433,30 @@ async def _realtime_market_loop(
             except Exception as exc:
                 logger.warning("Crypto price API target fetch failed for %s: %s", market.asset, exc)
 
-            # 2) Scrape Polymarket page as fallback to get the exact openPrice used for resolution.
-            if target_price is None and client is not None and hasattr(client, "fetch_page_html"):
-                slug = getattr(market, "event_slug", None) or getattr(market, "slug", None) or getattr(market, "market_slug", None)
-                if slug:
-                    try:
-                        html = await client.fetch_page_html(slug)
-                        target_price, source_label = _scrape_target_price_from_html(html, slug)
-                        if target_price is not None:
-                            logger.info("Scraped target price for %s from page: %s", market.asset, target_price)
-                    except Exception as exc:
-                        logger.warning("Page scrape failed for %s: %s", market.asset, exc)
+            # 2) Only scrape on first window (to get initial target), otherwise use price_feed fallback
+            if target_price is None:
+                if is_first_window and client is not None and hasattr(client, "fetch_page_html"):
+                    slug = getattr(market, "event_slug", None) or getattr(market, "slug", None) or getattr(market, "market_slug", None)
+                    if slug:
+                        try:
+                            html = await client.fetch_page_html(slug)
+                            target_price, source_label = _scrape_target_price_from_html(html, slug)
+                            if target_price is not None:
+                                logger.info("Scraped target price for %s from page (first window): %s", market.asset, target_price)
+                        except Exception as exc:
+                            logger.warning("Page scrape failed for %s: %s", market.asset, exc)
+                else:
+                    # For non-first windows, use current price as temporary fallback
+                    source_label = "price_feed_fallback"
+                    tick = None
+                    if price_feed is not None and hasattr(price_feed, "latest"):
+                        latest = getattr(price_feed, "latest", {})
+                        if isinstance(latest, dict):
+                            asset = getattr(market, "asset", None)
+                            tick = latest.get(asset.upper()) or latest.get(asset.lower()) or latest.get(asset)
+                    if tick is not None and hasattr(tick, "price"):
+                        target_price = float(tick.price)
+                        logger.info("Using price_feed fallback for %s window %s: %s", market.asset, window_ts, target_price)
 
             if target_price is not None:
                 if not hasattr(scanner, "_target_price_for_slug"):

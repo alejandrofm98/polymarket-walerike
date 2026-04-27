@@ -410,8 +410,8 @@ class PolymarketClient:
     def _validate_order(self, request: OrderRequest) -> None:
         if not 0.01 <= request.price <= 0.99:
             raise ValueError("price must be between 0.01 and 0.99")
-        if request.size < 1:
-            raise ValueError("size must be >= 1")
+        if request.size < 0.01:
+            raise ValueError("size must be >= 0.01")
         if request.order_type is OrderType.GTD and request.expiration is None:
             raise ValueError("GTD orders require expiration")
         if request.order_type is OrderType.GTD and request.expiration <= int(time.time()):

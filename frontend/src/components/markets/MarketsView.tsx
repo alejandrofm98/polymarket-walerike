@@ -12,7 +12,7 @@ interface MarketsViewProps {
   positions: Position[];
   loadingMarkets: boolean;
   onRefresh: () => void;
-  onClearPaperOrders: () => void;
+  onClearPositions: () => void;
   onClearTradeHistory: () => void;
 }
 
@@ -22,7 +22,7 @@ export function MarketsView({
   positions,
   loadingMarkets,
   onRefresh,
-  onClearPaperOrders,
+  onClearPositions,
   onClearTradeHistory,
 }: MarketsViewProps) {
   const closedTrades = trades.filter((t) => t.status !== "OPEN");
@@ -70,11 +70,11 @@ export function MarketsView({
             <Button
               variant="outline"
               size="sm"
-              onClick={onClearPaperOrders}
+              onClick={onClearPositions}
               className="border-white/10 bg-white/[0.03] text-xs hover:bg-white/8"
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Clear Paper
+              Clear Positions
             </Button>
             <Button
               variant="outline"

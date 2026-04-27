@@ -20,7 +20,6 @@ export type Config = {
   entry_threshold: number;
   max_sum_avg: number;
   max_buys_per_side: number;
-  shares_per_order: number;
   paper_mode: boolean;
   enabled_markets: Record<string, string[]>;
 };

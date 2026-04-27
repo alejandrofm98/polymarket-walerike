@@ -21,7 +21,7 @@ class HedgeConfig:
     entry_threshold: float = 0.499
     max_sum_avg: float = 0.98
     max_buys_per_side: int = 4
-    shares_per_order: float = 5.0
+    
     reversal_delta: float = 0.02
     depth_buy_discount_percent: float = 0.05
     second_side_buffer: float = 0.01
@@ -91,7 +91,7 @@ class HedgeStrategy:
         self._tracking: dict[str, TrackingState] = {}
 
     def evaluate(self, snapshot: MarketSnapshot, capital_per_trade: float, momentum_pct: float) -> HedgeSignal:
-        return self._evaluate_copytrade(snapshot)
+        return self._evaluate_copytrade(snapshot, capital_per_trade)
 
     def record_buy(self, snapshot: MarketSnapshot, side: str, price: float, size: float) -> None:
         key = self._key(snapshot)
@@ -136,7 +136,7 @@ class HedgeStrategy:
             "tracking_price": tracking.temp_price,
         }
 
-    def _evaluate_copytrade(self, snapshot: MarketSnapshot) -> HedgeSignal:
+    def _evaluate_copytrade(self, snapshot: MarketSnapshot, capital_per_trade: float = 10.0) -> HedgeSignal:
         reasons: list[str] = []
         if snapshot.yes_liquidity < self.config.min_liquidity or snapshot.no_liquidity < self.config.min_liquidity:
             reasons.append("liquidity below threshold")
@@ -204,8 +204,11 @@ class HedgeStrategy:
             tracking.tracking_side = opposite
             tracking.temp_price = snapshot.no_price if opposite == "NO" else snapshot.yes_price
             tracking.second_side_timer_started_at = None
-            reasons.append(f"strict alternation switching to {opposite}")
-            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=opposite)
+            side = opposite
+            price = snapshot.yes_price if side == "YES" else snapshot.no_price
+            liquidity = snapshot.yes_liquidity if side == "YES" else snapshot.no_liquidity
+            buy_count = row.buy_count_yes if side == "YES" else row.buy_count_no
+            reasons.append(f"strict alternation executing {opposite}")
 
         if price < tracking.temp_price:
             tracking.temp_price = price
@@ -216,7 +219,8 @@ class HedgeStrategy:
         effective_price = price + self.fee_per_share(price, self.config.taker_fee_rate)
         other_avg = self._avg(row.cost_no, row.qty_no) if side == "YES" else self._avg(row.cost_yes, row.qty_yes)
         max_acceptable_price = self.config.max_sum_avg - other_avg
-        projected_sum_avg = self._projected_sum_avg(row, side, effective_price, self.config.shares_per_order)
+        shares_for_capital = capital_per_trade / effective_price if effective_price > 0 else 0.0
+        projected_sum_avg = self._projected_sum_avg(row, side, effective_price, shares_for_capital)
         if effective_price > max_acceptable_price or projected_sum_avg > self.config.max_sum_avg:
             reasons.append(f"sumAvg guard price={effective_price:.4f} max={max_acceptable_price:.4f} projected={projected_sum_avg:.4f} includes_fee")
             return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
@@ -247,7 +251,7 @@ class HedgeStrategy:
             reasons.append("waiting for trigger")
             return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons, target_side=side)
 
-        size = min(self.config.shares_per_order, liquidity)
+        size = min(shares_for_capital, liquidity)
         yes_size = size if side == "YES" else 0.0
         no_size = size if side == "NO" else 0.0
         return HedgeSignal(HedgeMode.COPYTRADE, yes_size, no_size, expected_margin, reasons, target_side=side)

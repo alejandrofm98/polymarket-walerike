@@ -21,7 +21,6 @@ const emptyConfig: Config = {
   entry_threshold: 0,
   max_sum_avg: 0,
   max_buys_per_side: 1,
-  shares_per_order: 1,
   paper_mode: true,
   enabled_markets: {},
 };
@@ -109,10 +108,10 @@ function App() {
     }
   }
 
-  async function clearPaperOrders() {
+  async function clearPositions() {
     try {
-      const result = await api<{ cleared?: number }>("/api/trades/clear-open-paper", { method: "POST" });
-      log(`cleared ${result.cleared || 0} paper orders`);
+      const result = await api<{ cleared?: number }>("/api/trades/clear-open-positions", { method: "POST" });
+      log(`cleared ${result.cleared || 0} positions`);
       await Promise.all([refreshTrades(), refreshPositions(), refreshStatus()]);
     } catch (error) {
       log((error as Error).message);
@@ -306,7 +305,7 @@ function App() {
               positions={positions}
               loadingMarkets={loadingMarkets}
               onRefresh={refreshMarkets}
-              onClearPaperOrders={clearPaperOrders}
+              onClearPositions={clearPositions}
               onClearTradeHistory={clearTradeHistory}
             />
           )}
