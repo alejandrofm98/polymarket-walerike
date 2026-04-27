@@ -107,6 +107,7 @@ class PolymarketClient:
             return
         self._ensure_live_trading_enabled()
         self._clob_client = self._build_clob_client()
+        self._log_live_signing_config(self._clob_client)
         logger.info("Polymarket client connected in live mode")
 
     async def close(self) -> None:
@@ -318,10 +319,84 @@ class PolymarketClient:
             kwargs["funder"] = self.settings.funder
         if self.settings.signature_type is not None:
             kwargs["signature_type"] = self.settings.signature_type
+        env_creds = self._env_api_creds(types_module)
+        if env_creds is not None:
+            kwargs["creds"] = env_creds
         client = client_module.ClobClient(**kwargs)
-        if self.settings.live_trading and self.settings.private_key and hasattr(client, "create_or_derive_api_creds"):
+        if env_creds is None and self.settings.live_trading and self.settings.private_key and hasattr(client, "create_or_derive_api_creds"):
             client.set_api_creds(client.create_or_derive_api_creds())
         return client
+
+    def _env_api_creds(self, types_module: Any) -> Any | None:
+        if not any((self.settings.api_secret, self.settings.api_passphrase)):
+            return None
+        values = (self.settings.api_key, self.settings.api_secret, self.settings.api_passphrase)
+        if not all(values):
+            missing = [
+                name
+                for name, value in (
+                    ("POLYMARKET_API_KEY", self.settings.api_key),
+                    ("POLYMARKET_API_SECRET", self.settings.api_secret),
+                    ("POLYMARKET_API_PASSPHRASE", self.settings.api_passphrase),
+                )
+                if not value
+            ]
+            raise RuntimeError(f"Incomplete CLOB API credentials: missing {', '.join(missing)}")
+        return types_module.ApiCreds(
+            api_key=str(self.settings.api_key),
+            api_secret=str(self.settings.api_secret),
+            api_passphrase=str(self.settings.api_passphrase),
+        )
+
+    def _log_live_signing_config(self, client: Any) -> None:
+        signer = None
+        with contextlib.suppress(Exception):
+            signer = client.get_address() if hasattr(client, "get_address") else None
+        funder = str(self.settings.funder or signer or "") or None
+        signature_type = self.settings.signature_type
+        if signature_type is None:
+            signature_type = 0
+        auth_mode = "env_creds" if all((self.settings.api_key, self.settings.api_secret, self.settings.api_passphrase)) else "derived_creds"
+        logger.info(
+            "live signing config signer={} funder={} signature_type={} api_key_address={} auth_mode={}",
+            self._mask_address(signer),
+            self._mask_address(funder),
+            signature_type,
+            self._mask_address(self.settings.api_key_address),
+            auth_mode,
+        )
+        self._warn_live_signing_config(signer, funder, signature_type)
+
+    def _warn_live_signing_config(self, signer: str | None, funder: str | None, signature_type: int) -> None:
+        signer_l = str(signer or "").lower()
+        funder_l = str(funder or "").lower()
+        api_key_l = str(self.settings.api_key_address or "").lower()
+        external_l = str(self.settings.external_wallet_address or "").lower()
+        if api_key_l and signer_l and api_key_l != signer_l:
+            logger.warning(
+                "CLOB API key address does not match signer address: api_key_address={} signer={}",
+                self._mask_address(self.settings.api_key_address),
+                self._mask_address(signer),
+            )
+        if external_l and signer_l and external_l != signer_l:
+            logger.warning(
+                "POLYMARKET_EXTERNAL_WALLET_ADDRESS does not match signer private key: external={} signer={}",
+                self._mask_address(self.settings.external_wallet_address),
+                self._mask_address(signer),
+            )
+        if signature_type == 0 and funder_l and signer_l and funder_l != signer_l:
+            logger.warning("signature_type=0 expects funder to equal signer or be empty")
+        if signature_type in {1, 2} and not funder_l:
+            logger.warning("signature_type={} expects POLYMARKET_FUNDER to be set", signature_type)
+
+    @staticmethod
+    def _mask_address(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value)
+        if len(text) <= 14:
+            return text
+        return f"{text[:8]}...{text[-6:]}"
 
     def _require_clob_client(self) -> Any:
         self._ensure_live_trading_enabled()

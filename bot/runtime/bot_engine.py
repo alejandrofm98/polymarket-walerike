@@ -65,9 +65,15 @@ class BotEngine:
         self.solo_log = False
         self.requested_paper_mode = self.paper
         self.last_error: str | None = None
+        self.last_skip_reason: str | None = None
+        self.last_snapshot_debug: dict[str, Any] | None = None
         self.last_tick_at: float | None = None
         self.ticks = 0
         self.orders_placed = 0
+        self.order_attempts = 0
+        self.order_failures = 0
+        self.last_order_attempt_at: float | None = None
+        self.last_order_failure: str | None = None
         self.skipped = 0
         self._task: asyncio.Task[None] = None
         self._realtime_task: asyncio.Task[None] = None
@@ -218,19 +224,13 @@ class BotEngine:
         await self._publish("markets", {"markets": [market.to_dict() if hasattr(market, "to_dict") else asdict(market) for market in markets]})
         for market in markets:
             if self._market_has_ended(market):
-                self.logger.info(f"[SKIP] market ended: {market.asset}/{market.timeframe} {market.condition_id or market.market_id}")
+                await self._record_skip("market_ended", market, {"market_id": market.condition_id or market.market_id, "end_date": getattr(market, "end_date", None)})
                 summary["skipped"] += 1
                 self.skipped += 1
                 continue
-            snapshot = self._snapshot(market)
+            snapshot, snapshot_debug = self._snapshot_with_debug(market)
             if snapshot is None:
-                tick = self._latest_tick(market.asset)
-                if tick is None and self.price_feed is not None:
-                    self.logger.info(f"[SKIP] snapshot: missing price feed for {market.asset}")
-                elif self.price_feed is None and self.oracle is None:
-                    self.logger.info(f"[SKIP] snapshot: missing oracle and price_feed for {market.asset}")
-                else:
-                    self.logger.info(f"[SKIP] snapshot: missing data for {market.asset}/{market.timeframe}")
+                await self._record_skip(str(snapshot_debug.get("reason") or "snapshot_missing"), market, snapshot_debug)
                 summary["skipped"] += 1
                 self.skipped += 1
                 continue
@@ -259,9 +259,15 @@ class BotEngine:
             "status": "paused" if self.paused else "running" if self.running else "stopped",
             "ticks": self.ticks,
             "orders_placed": self.orders_placed,
+            "order_attempts": self.order_attempts,
+            "order_failures": self.order_failures,
+            "last_order_attempt_at": self.last_order_attempt_at,
+            "last_order_failure": self.last_order_failure,
             "skipped": self.skipped,
             "last_tick_at": self.last_tick_at,
             "last_error": self.last_error,
+            "last_skip_reason": self.last_skip_reason,
+            "last_snapshot_debug": self.last_snapshot_debug,
             "account": self.account_summary(),
         }
 
@@ -329,12 +335,28 @@ class BotEngine:
         self._connected = True
         await self._log_event("client connected")
 
+    async def _record_skip(self, reason: str, market: Any, details: dict[str, Any] | None = None) -> None:
+        details = details or {}
+        self.last_skip_reason = reason
+        self.last_snapshot_debug = details
+        await self._log_event(
+            f"[SNAPSHOT_SKIP] reason={reason} asset={getattr(market, 'asset', None)}/{getattr(market, 'timeframe', None)} "
+            f"market={getattr(market, 'condition_id', None) or getattr(market, 'market_id', None)} details={details}"
+        )
+
     async def _evaluate_and_order(self, snapshot: MarketSnapshot) -> int:
-        self.logger.info(f"[CHECK] {snapshot.asset}/{snapshot.timeframe} YES={snapshot.yes_price:.3f} NO={snapshot.no_price:.3f} SUM={snapshot.yes_price + snapshot.no_price:.3f}")
+        mode = "PAPER" if self.paper else "LIVE"
+        await self._log_event(
+            f"[BET_EVAL] mode={mode} market={snapshot.market_id} asset={snapshot.asset}/{snapshot.timeframe} "
+            f"yes={snapshot.yes_price:.3f} no={snapshot.no_price:.3f} sum={snapshot.yes_price + snapshot.no_price:.3f} "
+            f"spot={snapshot.spot_price:.2f} oracle={snapshot.oracle_price:.2f} solo_log={self.solo_log} "
+            f"balance={self.account.balance:.2f} exposure={self.account.total_exposure:.2f}"
+        )
+        await self._log_event(f"[CHECK] {snapshot.asset}/{snapshot.timeframe} YES={snapshot.yes_price:.3f} NO={snapshot.no_price:.3f} SUM={snapshot.yes_price + snapshot.no_price:.3f}")
 
         momentum = self._momentum(snapshot.asset)
         signal = self.strategy.evaluate(snapshot, self.capital_per_trade, momentum)
-        self.logger.info(f"[STRATEGY] mode={signal.mode.value} yes_size={signal.yes_size:.2f} no_size={signal.no_size:.2f} margin={signal.expected_margin:.4f} reasons={signal.reasons}")
+        await self._log_event(f"[STRATEGY] mode={signal.mode.value} yes_size={signal.yes_size:.2f} no_size={signal.no_size:.2f} margin={signal.expected_margin:.4f} reasons={signal.reasons}")
 
         trade_key = f"{snapshot.market_id}:{snapshot.asset}:{snapshot.timeframe}"
         decision = self.risk_manager.check_trade(
@@ -352,13 +374,24 @@ class BotEngine:
         await self._publish("bot_signal", {"snapshot": asdict(snapshot), "signal": asdict(signal), "risk": asdict(decision), "strategy_state": strategy_state})
 
         if self.solo_log:
-            self.logger.info(f"[SKIP] solo_log enabled - would place {signal.yes_size + signal.no_size:.2f} for {trade_key}")
+            await self._log_event(f"[BET_DECISION] action=SOLO_LOG would_place={signal.yes_size + signal.no_size:.2f} trade_key={trade_key} reasons={signal.reasons}")
+            return 0
+        if signal.yes_size <= 0 and signal.no_size <= 0:
+            await self._log_event(f"[BET_DECISION] action=NO_ORDER trade_key={trade_key} reasons={signal.reasons} target_side={signal.target_side} strategy_state={strategy_state}")
             return 0
         if not decision.allowed:
-            self.logger.info(f"[SKIP] risk denied - reasons={decision.reasons}")
+            await self._log_event(f"[BET_DECISION] action=RISK_DENIED trade_key={trade_key} requested={signal.yes_size + signal.no_size:.2f} adjusted={decision.adjusted_size} reasons={decision.reasons}")
             return 0
 
-        self.logger.info(f"[TRADE] APPROVED: placing {signal.yes_size:.2f} YES @ {snapshot.yes_price:.3f} and {signal.no_size:.2f} NO @ {snapshot.no_price:.3f} for {trade_key}")
+        approved_side = "YES" if signal.yes_size > 0 else "NO" if signal.no_size > 0 else "NONE"
+        approved_size = signal.yes_size if signal.yes_size > 0 else signal.no_size
+        approved_price = snapshot.yes_price if signal.yes_size > 0 else snapshot.no_price
+        approved_token = snapshot.yes_token_id if signal.yes_size > 0 else snapshot.no_token_id
+        await self._log_event(
+            f"[BET_DECISION] action=APPROVED mode={mode} trade_key={trade_key} side={approved_side} "
+            f"price={approved_price:.3f} size={approved_size:.2f} token_id={approved_token} reasons={signal.reasons} risk={decision.reasons}"
+        )
+        await self._log_event(f"[TRADE] APPROVED: placing {signal.yes_size:.2f} YES @ {snapshot.yes_price:.3f} and {signal.no_size:.2f} NO @ {snapshot.no_price:.3f} for {trade_key}")
         placed = 0
         if signal.yes_size > 0:
             result = await self._place_leg(snapshot, snapshot.yes_token_id, OrderSide.BUY, snapshot.yes_price, signal.yes_size, "YES")
@@ -378,29 +411,74 @@ class BotEngine:
 
     async def _place_leg(self, snapshot: MarketSnapshot, token_id: str, side: OrderSide, price: float, size: float, label: str) -> int:
         if not token_id:
-            self.logger.info(f"[SKIP] {label} leg: missing token_id")
+            await self._log_event(f"[SKIP] {label} leg: missing token_id")
             return 0
         if size < 1:
-            self.logger.info(f"[SKIP] {label} leg: size {size:.2f} below minimum 1")
+            await self._log_event(f"[SKIP] {label} leg: size {size:.2f} below minimum 1")
             return 0
         if self.paper and side is OrderSide.BUY:
             available = snapshot.yes_liquidity if label == "YES" else snapshot.no_liquidity
             if size > available:
-                self.logger.info(f"[SKIP] {label} leg: paper book liquidity {available:.2f} below requested size {size:.2f}")
+                await self._log_event(f"[SKIP] {label} leg: paper book liquidity {available:.2f} below requested size {size:.2f}")
                 return 0
-        expiration = int(time.time()) + 60
-        order = await self.client.place_order(
-            OrderRequest(
-                market=snapshot.market_id,
-                asset_id=token_id,
-                side=side,
-                price=max(0.01, min(0.99, price)),
-                size=size,
-                order_type=OrderType.GTD,
-                expiration=expiration,
-                client_order_id=f"walerike-{uuid.uuid4().hex}",
-            )
+        expiration = int(time.time()) + 120
+        order_price = max(0.01, min(0.99, price))
+        client_order_id = f"walerike-{uuid.uuid4().hex}"
+        mode = "PAPER" if self.paper else "LIVE"
+        self.order_attempts += 1
+        self.last_order_attempt_at = time.time()
+        attempt_payload = {
+            "market": snapshot.market_id,
+            "asset": snapshot.asset,
+            "timeframe": snapshot.timeframe,
+            "side": label,
+            "order_side": side.value,
+            "price": order_price,
+            "size": size,
+            "token_id": token_id,
+            "mode": mode,
+            "client_order_id": client_order_id,
+            "attempt": self.order_attempts,
+        }
+        await self._log_event(
+            f"[ORDER_ATTEMPT] attempt={self.order_attempts} mode={mode} market={snapshot.market_id} "
+            f"asset={snapshot.asset}/{snapshot.timeframe} side={label} order_side={side.value} "
+            f"price={order_price:.3f} size={size:.2f} token_id={token_id} client_order_id={client_order_id}"
         )
+        await self._publish("order_attempt", attempt_payload)
+        try:
+            order = await self.client.place_order(
+                OrderRequest(
+                    market=snapshot.market_id,
+                    asset_id=token_id,
+                    side=side,
+                    price=order_price,
+                    size=size,
+                    order_type=OrderType.GTD,
+                    expiration=expiration,
+                    client_order_id=client_order_id,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - live order rejects must not stop the bot loop
+            self.last_error = f"order failed {label} {snapshot.asset}/{snapshot.timeframe}: {exc}"
+            self.last_order_failure = self.last_error
+            self.order_failures += 1
+            await self._log_event(f"[ORDER_FAILED] attempt={self.order_attempts} mode={mode} market={snapshot.market_id} side={label} price={order_price:.3f} size={size:.2f} error={exc}", level="error")
+            await self._log_event(self.last_error, level="error")
+            await self._publish("order_failed", {**attempt_payload, "error": str(exc)})
+            await self._publish("bot_error", {"error": self.last_error})
+            return 0
+        if not order.order_id:
+            self.last_error = f"order failed {label} {snapshot.asset}/{snapshot.timeframe}: missing order id response={order.raw}"
+            self.last_order_failure = self.last_error
+            self.order_failures += 1
+            await self._log_event(f"[ORDER_FAILED] attempt={self.order_attempts} mode={mode} market={snapshot.market_id} side={label} price={order_price:.3f} size={size:.2f} error=missing_order_id response={order.raw}", level="error")
+            await self._log_event(self.last_error, level="error")
+            await self._publish("order_failed", {**attempt_payload, "error": "missing_order_id", "response": order.raw})
+            await self._publish("bot_error", {"error": self.last_error})
+            return 0
+        await self._log_event(f"[ORDER_ACCEPTED] attempt={self.order_attempts} mode={mode} order_id={order.order_id} status={order.status} market={snapshot.market_id} side={label} price={order_price:.3f} size={size:.2f}")
+        await self._publish("order_accepted", {**attempt_payload, "order_id": order.order_id, "status": order.status, "raw": order.raw})
         self.orders_placed += 1
         self.account.total_exposure += price * size
         self.account.positions_by_market[snapshot.market_id] = self.account.positions_by_market.get(snapshot.market_id, 0.0) + size
@@ -443,18 +521,54 @@ class BotEngine:
         ]
 
     def _snapshot(self, market: MarketCandidate) -> MarketSnapshot | None:
+        snapshot, _debug = self._snapshot_with_debug(market)
+        return snapshot
+
+    def _snapshot_with_debug(self, market: MarketCandidate) -> tuple[MarketSnapshot | None, dict[str, Any]]:
         tick = self._latest_tick(market.asset)
         oracle_price = self._oracle_price(market.asset)
-        if tick is None or oracle_price is None:
-            return None
+        debug: dict[str, Any] = {
+            "asset": market.asset,
+            "timeframe": market.timeframe,
+            "market_id": market.condition_id or market.market_id,
+            "market_slug": market.market_slug or market.slug or market.event_slug,
+            "has_price_feed": self.price_feed is not None,
+            "has_oracle": self.oracle is not None,
+            "tick_price": float(getattr(tick, "price", 0) or 0) if tick is not None else None,
+            "oracle_price": float(getattr(oracle_price, "price", 0) or 0) if oracle_price is not None else None,
+            "best_ask_up": market.best_ask_up,
+            "best_ask_down": market.best_ask_down,
+            "up_price": market.up_price,
+            "down_price": market.down_price,
+            "up_token_id": market.up_token_id,
+            "down_token_id": market.down_token_id,
+            "tokens_count": len(market.tokens),
+        }
+        if tick is None:
+            debug["reason"] = "tick_missing"
+            return None, debug
+        if oracle_price is None:
+            debug["reason"] = "oracle_missing"
+            return None, debug
         up = self._token(market, "up") or self._token(market, "yes")
         down = self._token(market, "down") or self._token(market, "no")
         up_token_id = str(market.up_token_id or (up or {}).get("token_id") or (up or {}).get("asset_id") or (up or {}).get("id") or (up or {}).get("value") or "")
         down_token_id = str(market.down_token_id or (down or {}).get("token_id") or (down or {}).get("asset_id") or (down or {}).get("id") or (down or {}).get("value") or "")
         up_price = market.best_ask_up if market.best_ask_up is not None else market.up_price if market.up_price is not None else self._price(up, market.raw, "yes")
         down_price = market.best_ask_down if market.best_ask_down is not None else market.down_price if market.down_price is not None else self._price(down, market.raw, "no")
-        if not up_token_id or not down_token_id or up_price is None or down_price is None:
-            return None
+        debug.update({"resolved_up_token_id": up_token_id or None, "resolved_down_token_id": down_token_id or None, "resolved_up_price": up_price, "resolved_down_price": down_price})
+        if not up_token_id:
+            debug["reason"] = "yes_token_missing"
+            return None, debug
+        if not down_token_id:
+            debug["reason"] = "no_token_missing"
+            return None, debug
+        if up_price is None:
+            debug["reason"] = "yes_price_missing"
+            return None, debug
+        if down_price is None:
+            debug["reason"] = "no_price_missing"
+            return None, debug
         yes_liquidity = self._buy_liquidity_at_price(
             market.asks_up,
             up_price,
@@ -467,6 +581,7 @@ class BotEngine:
             fallback=self._liquidity_fallback(down, market),
             book_price=market.best_ask_down,
         )
+        debug.update({"reason": "ok", "yes_liquidity": yes_liquidity, "no_liquidity": no_liquidity})
         return MarketSnapshot(
             market_id=market.condition_id or market.market_id,
             asset=market.asset,
@@ -484,7 +599,7 @@ class BotEngine:
             end_date=market.end_date,
             price_to_beat=market.price_to_beat,
             window_start_timestamp=market.window_start_timestamp,
-        )
+        ), debug
 
     @staticmethod
     def _buy_liquidity_at_price(levels: list[dict[str, float]], limit_price: float, *, fallback: float, book_price: float | None) -> float:
@@ -791,16 +906,14 @@ class BotEngine:
         return None
 
     def _oracle_price(self, asset: str) -> Any | None:
-        if self.oracle is None:
-            return None
-        if hasattr(self.oracle, "get_cached_price"):
+        if self.oracle is not None and hasattr(self.oracle, "get_cached_price"):
             cached = self.oracle.get_cached_price(asset)
             if cached is not None:
                 return cached
-        if hasattr(self.oracle, "read_price"):
+        if self.oracle is not None and hasattr(self.oracle, "read_price"):
             with contextlib.suppress(Exception):
                 return self.oracle.read_price(asset)
-        if self.paper and self.price_feed is not None:
+        if self.price_feed is not None:
             tick = self._latest_tick(asset)
             if tick is not None:
                 from bot.data.price_aggregator import OraclePrice

@@ -315,6 +315,49 @@ def _apply_book_event(scanner: Any, markets: list[Any], payload: dict[str, Any])
             market.book_updated_at = time.time()
 
 
+def _use_price_feed_fallback(market: Any, price_feed: Any, scanner: Any, target_cache_key: str, window_ts: Any) -> None:
+    """Use current RTDS price as temporary price_to_beat when API/scrape fail.
+
+    Stores in scanner cache so _apply_cached_target works during backoff,
+    but callers must keep target_fetched=(False, now) so the API is retried.
+    """
+    if price_feed is None or not hasattr(price_feed, "latest"):
+        _apply_cached_target(market, scanner)
+        return
+    asset = getattr(market, "asset", None)
+    if not asset:
+        _apply_cached_target(market, scanner)
+        return
+    latest = getattr(price_feed, "latest", {})
+    if not isinstance(latest, dict):
+        _apply_cached_target(market, scanner)
+        return
+    tick = latest.get(asset.upper()) or latest.get(asset.lower()) or latest.get(asset)
+    if tick is None:
+        _apply_cached_target(market, scanner)
+        return
+    snapshot_price = float(getattr(tick, "price", 0) or 0)
+    if snapshot_price <= 0:
+        _apply_cached_target(market, scanner)
+        return
+    # Only set fallback if no authoritative price cached yet.
+    if not hasattr(scanner, "_target_price_for_slug"):
+        scanner._target_price_for_slug = {}
+    existing = scanner._target_price_for_slug.get(target_cache_key)
+    if existing and existing.get("source") not in (None, "price_feed_fallback"):
+        # Already have an authoritative price (API/scrape), don't overwrite.
+        _apply_cached_target(market, scanner)
+        return
+    scanner._target_price_for_slug[target_cache_key] = {
+        "price": snapshot_price,
+        "timestamp": window_ts,
+        "source": "price_feed_fallback",
+    }
+    market.price_to_beat = snapshot_price
+    market.target_price_source = "price_feed_fallback"
+    logger.info("Using price_feed fallback %s for %s window %s", snapshot_price, asset, window_ts)
+
+
 async def _realtime_market_loop(
     broadcaster,
     scanner,
@@ -379,9 +422,9 @@ async def _realtime_market_loop(
             try:
                 target_price, source_label = await _fetch_crypto_price_api_target(market, client)
                 if target_price is not None:
-                    logger.info("Fetched target price for {} from crypto-price API: {}", market.asset, target_price)
+                    logger.info("Fetched target price for %s from crypto-price API: %s", market.asset, target_price)
             except Exception as exc:
-                logger.warning("Crypto price API target fetch failed for {}: {}", market.asset, exc)
+                logger.warning("Crypto price API target fetch failed for %s: %s", market.asset, exc)
 
             # 2) Scrape Polymarket page as fallback to get the exact openPrice used for resolution.
             if target_price is None and client is not None and hasattr(client, "fetch_page_html"):
@@ -391,9 +434,9 @@ async def _realtime_market_loop(
                         html = await client.fetch_page_html(slug)
                         target_price, source_label = _scrape_target_price_from_html(html, slug)
                         if target_price is not None:
-                            logger.info("Scraped target price for {} from page: {}", market.asset, target_price)
+                            logger.info("Scraped target price for %s from page: %s", market.asset, target_price)
                     except Exception as exc:
-                        logger.warning("Page scrape failed for {}: {}", market.asset, exc)
+                        logger.warning("Page scrape failed for %s: %s", market.asset, exc)
 
             if target_price is not None:
                 if not hasattr(scanner, "_target_price_for_slug"):
@@ -408,13 +451,14 @@ async def _realtime_market_loop(
                 # Mark as successfully fetched.
                 target_fetched[target_cache_key] = (True, now)
             else:
-                # Mark attempt but allow retry later.
+                # API+scrape failed. Use current RTDS price as temporary fallback
+                # but keep (False, now) so we retry the API in 30s.
+                _use_price_feed_fallback(market, price_feed, scanner, target_cache_key, window_ts)
                 target_fetched[target_cache_key] = (False, now)
-                _apply_cached_target(market, scanner)
         except Exception as exc:
-            logger.warning("Failed to fetch target price for {}: {}", market.asset, exc)
+            logger.warning("Failed to fetch target price for %s: %s", market.asset, exc)
+            _use_price_feed_fallback(market, price_feed, scanner, target_cache_key, window_ts)
             target_fetched[target_cache_key] = (False, now)
-            _apply_cached_target(market, scanner)
 
     client = getattr(scanner, "client", None)
     if client is not None and hasattr(client, "register_callback"):
@@ -489,6 +533,23 @@ def create_app(settings: Any, services: dict[str, Any] | None = None) -> Any:
         else:
             realtime_task = None
 
+        engine = services.get("bot_engine")
+        if bool(getattr(settings, "auto_start_bot", False)) and engine is not None and hasattr(engine, "start"):
+            async def _auto_start() -> None:
+                timeout = float(getattr(settings, "bot_start_timeout_seconds", 20.0))
+                logger.info("auto-start bot requested timeout=%s", timeout)
+                try:
+                    await asyncio.wait_for(engine.start(), timeout=timeout)
+                    logger.info("auto-start bot completed")
+                except asyncio.TimeoutError:
+                    logger.error("auto-start bot timed out")
+                except Exception as exc:  # noqa: BLE001 - keep web server alive if bot cannot start
+                    logger.error("auto-start bot failed: %s", exc)
+
+            auto_start_task = asyncio.create_task(_auto_start())
+        else:
+            auto_start_task = None
+
         yield
 
         # Stop services
@@ -501,6 +562,10 @@ def create_app(settings: Any, services: dict[str, Any] | None = None) -> Any:
             price_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await price_task
+        if auto_start_task is not None:
+            auto_start_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await auto_start_task
 
         engine = services.get("bot_engine")
         if engine is not None and hasattr(engine, "stop"):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from dataclasses import dataclass
 
 import pytest
 
@@ -19,7 +20,7 @@ def _request(**overrides: object) -> OrderRequest:
         "price": 0.5,
         "size": 1.0,
         "order_type": OrderType.GTD,
-        "expiration": int(time.time()) + 60,
+        "expiration": int(time.time()) + 120,
     }
     values.update(overrides)
     return OrderRequest(**values)
@@ -112,6 +113,65 @@ def test_websocket_payload_builders_and_urls() -> None:
     assert client.build_user_subscribe_payload(["condition-a"]) == {"type": "user", "markets": ["condition-a"], "auth": {"apiKey": "key"}}
     assert client._ws_url("market") == "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     assert client._ws_url("user") == "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+
+
+def test_env_api_creds_ignore_api_key_without_secret_and_passphrase() -> None:
+    client = PolymarketClient(settings=Settings(api_key="key"), paper_mode=False)
+
+    class Types:
+        class ApiCreds:  # pragma: no cover - must not be constructed for incomplete values
+            pass
+
+    assert client._env_api_creds(Types) is None
+
+
+def test_env_api_creds_require_complete_values_when_secret_or_passphrase_set() -> None:
+    client = PolymarketClient(settings=Settings(api_secret="secret"), paper_mode=False)
+
+    class Types:
+        class ApiCreds:  # pragma: no cover - must not be constructed for incomplete values
+            pass
+
+    with pytest.raises(RuntimeError, match="POLYMARKET_API_KEY"):
+        client._env_api_creds(Types)
+
+
+def test_env_api_creds_construct_clob_creds() -> None:
+    settings = Settings(api_key="key", api_secret="secret", api_passphrase="pass")
+    client = PolymarketClient(settings=settings, paper_mode=False)
+
+    class Types:
+        @dataclass
+        class ApiCreds:
+            api_key: str
+            api_secret: str
+            api_passphrase: str
+
+    creds = client._env_api_creds(Types)
+
+    assert creds.api_key == "key"
+    assert creds.api_secret == "secret"
+    assert creds.api_passphrase == "pass"
+
+
+def test_live_signing_warnings_detect_api_key_address_mismatch(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    settings = Settings(api_key_address="0x1111111111111111111111111111111111111111")
+    client = PolymarketClient(settings=settings, paper_mode=False)
+    warnings = []
+
+    class FakeLogger:
+        def warning(self, message: str, *args: object) -> None:
+            warnings.append(message.format(*args))
+
+    monkeypatch.setattr(polymarket_client_module, "logger", FakeLogger())
+
+    client._warn_live_signing_config(
+        "0x2222222222222222222222222222222222222222",
+        "0x2222222222222222222222222222222222222222",
+        0,
+    )
+
+    assert any("API key address does not match signer address" in warning for warning in warnings)
 
 
 def test_live_positions_use_data_api_not_sdk_positions() -> None:

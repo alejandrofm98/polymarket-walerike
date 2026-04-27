@@ -88,6 +88,18 @@ def build_services(settings: Settings) -> dict[str, Any]:
     }
 
 
+def create_application(settings: Settings | None = None) -> Any:
+    logger = configure_logging()
+    settings = settings or Settings.from_env()
+    services = build_services(settings)
+    feed_type = getattr(settings, "price_feed_source", "binance")
+    if isinstance(logger, logging.Logger):
+        logger.info("startup paper_mode=%s live_trading=%s price_feed=%s", settings.paper_mode, settings.live_trading, feed_type)
+    else:
+        logger.info("startup paper_mode={} live_trading={} price_feed={}", settings.paper_mode, settings.live_trading, feed_type)
+    return create_app(settings, services)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Polymarket Walerike dashboard")
     parser.add_argument("--paper", action="store_true", help="force paper mode")
@@ -100,7 +112,6 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    logger = configure_logging()
     settings = Settings.from_env()
     if args.paper:
         settings.paper_mode = True
@@ -112,13 +123,9 @@ def main() -> None:
     if args.port:
         settings.web_port = args.port
 
-    services = build_services(settings)
-    feed_type = getattr(settings, "price_feed_source", "binance")
-    logger.info("startup paper_mode=%s live_trading=%s price_feed=%s", settings.paper_mode, settings.live_trading, feed_type) if isinstance(logger, logging.Logger) else logger.info(
-        "startup paper_mode={} live_trading={} price_feed={}", settings.paper_mode, settings.live_trading, feed_type
-    )
-    app = create_app(settings, services)
+    app = create_application(settings)
     if args.smoke:
+        logger = logging.getLogger("walerike")
         if isinstance(logger, logging.Logger):
             logger.info("smoke startup ok")
         else:
@@ -129,6 +136,9 @@ def main() -> None:
     except ImportError as exc:  # pragma: no cover - dependency error path
         raise RuntimeError("uvicorn required to run web server") from exc
     uvicorn.run(app, host=settings.web_host, port=settings.web_port)
+
+
+app = None if __name__ == "__main__" else create_application()
 
 
 if __name__ == "__main__":

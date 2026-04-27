@@ -90,7 +90,7 @@ class PolymarketRTDSFeed:
     async def _run_symbol(self, symbol: str) -> None:
         backoff = 1.0
         asset = self.REVERSE_SYMBOL_MAP.get(symbol.lower())
-        reconnect_interval = 1.5
+        reconnect_interval = 0.2
         while not self._closed:
             try:
                 async with websockets.connect(self.url, ping_interval=None, ping_timeout=None) as ws:
@@ -107,7 +107,6 @@ class PolymarketRTDSFeed:
                             now = time.time()
                             if self._snapshot_seen.get(asset):
                                 if now - snapshot_time > reconnect_interval:
-                                    logger.info("RTDS reconnecting to refresh snapshot for {}", symbol)
                                     break
                             continue
                         

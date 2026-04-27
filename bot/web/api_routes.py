@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from contextlib import suppress
+import asyncio
 import importlib.util
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
 from bot.config.runtime_config import RuntimeConfigStore, validate_runtime_config
+
+logger = logging.getLogger("walerike.api")
 
 try:
     from fastapi import APIRouter, HTTPException, Response
@@ -53,11 +58,26 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         feed_type = type(pf).__name__
         latest = getattr(pf, "latest", {})
         assets = getattr(pf, "assets", [])
+        now = time.time()
+        last_update_at = getattr(pf, "_last_update_at", {})
+        last_live_update = getattr(pf, "_last_live_update", {})
+        snapshot_seen = getattr(pf, "_snapshot_seen", {})
         return {
             "available": True,
             "feed_type": feed_type,
             "assets": assets,
-            "latest": {k: {"price": v.price, "timestamp": v.timestamp} for k, v in latest.items()} if latest else {},
+            "topic": getattr(pf, "topic", None),
+            "closed": bool(getattr(pf, "_closed", False)),
+            "latest": {k: {"price": getattr(v, "price", None), "timestamp": getattr(v, "timestamp", None)} for k, v in latest.items()} if isinstance(latest, dict) else {},
+            "snapshot_seen": dict(snapshot_seen) if isinstance(snapshot_seen, dict) else {},
+            "last_update_age_seconds": {
+                str(asset): round(now - float(updated_at), 3) if updated_at else None
+                for asset, updated_at in last_update_at.items()
+            } if isinstance(last_update_at, dict) else {},
+            "last_live_update_age_seconds": {
+                str(asset): round(now - float(updated_at), 3) if updated_at else None
+                for asset, updated_at in last_live_update.items()
+            } if isinstance(last_live_update, dict) else {},
         }
 
     def runtime_mode_status(runtime_payload: dict[str, Any]) -> dict[str, Any]:
@@ -144,6 +164,11 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         if hasattr(candidate, "__dataclass_fields__"):
             return asdict(candidate)
         return dict(candidate) if isinstance(candidate, dict) else {"value": candidate}
+
+    @router.get("/health")
+    async def health() -> dict[str, Any]:
+        runtime_payload = engine.status() if engine is not None and hasattr(engine, "status") else asdict(runtime)
+        return {"ok": True, "runtime": runtime_payload, "price_feed": get_price_feed_status()}
 
     @router.get("/status")
     async def status() -> dict[str, Any]:
@@ -286,7 +311,10 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         if engine is not None:
             try:
                 if action == "start":
-                    state = await engine.start()
+                    timeout = float(getattr(settings, "bot_start_timeout_seconds", 20.0))
+                    logger.info("bot start requested timeout=%s", timeout)
+                    state = await asyncio.wait_for(engine.start(), timeout=timeout)
+                    logger.info("bot start completed running=%s paper_mode=%s live_trading=%s", state.get("running"), state.get("paper_mode"), state.get("live_trading"))
                 elif action == "pause":
                     state = await engine.pause()
                 elif action == "stop":
@@ -297,6 +325,9 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
                     return {"ok": False, "error": f"unknown action: {action}", "runtime": engine.status()}
             except RuntimeError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except asyncio.TimeoutError as exc:
+                logger.error("bot start timed out")
+                raise HTTPException(status_code=504, detail="bot start timed out") from exc
             return {"ok": True, "runtime": state}
 
         if action == "start":

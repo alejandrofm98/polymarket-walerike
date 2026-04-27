@@ -136,6 +136,11 @@ class FakeClient:
         )
 
 
+class FailingOrderClient(FakeClient):
+    async def place_order(self, request):  # type: ignore[no-untyped-def]
+        raise RuntimeError("CLOB rejected order")
+
+
 class OfficialResolutionClient(FakeClient):
     async def fetch_market_by_slug(self, slug: str) -> dict[str, object]:
         assert slug == "btc-updown-5m-closed"
@@ -235,6 +240,12 @@ def test_bot_engine_lifecycle_and_single_paper_tick() -> None:
         assert len(client.orders) == 1
         assert len(logger.records) == 1
         assert price_feed.closed is True
+        assert engine.order_attempts == 1
+        assert engine.order_failures == 0
+        assert engine.last_order_attempt_at is not None
+        assert engine.status()["order_attempts"] == 1
+        assert any(event[0] == "order_attempt" for event in broadcaster.events)
+        assert any(event[0] == "order_accepted" for event in broadcaster.events)
         assert any(event[0] == "order_placed" for event in broadcaster.events)
 
     asyncio.run(run())
@@ -242,9 +253,11 @@ def test_bot_engine_lifecycle_and_single_paper_tick() -> None:
 
 def test_bot_engine_skips_missing_prices_without_crashing() -> None:
     async def run() -> None:
+        broadcaster = FakeBroadcaster()
         engine = BotEngine(
             settings=Settings(paper_mode=True, live_trading=False),
             client=FakeClient(),
+            broadcaster=broadcaster,
             scanner=FakeScanner(),
             price_feed=None,
             oracle=FakeOracle(),
@@ -254,6 +267,38 @@ def test_bot_engine_skips_missing_prices_without_crashing() -> None:
 
         assert summary["skipped"] == 1
         assert engine.last_error is None
+        assert engine.last_skip_reason == "tick_missing"
+        assert engine.last_snapshot_debug is not None
+        assert engine.last_snapshot_debug["reason"] == "tick_missing"
+        assert any(event[0] == "log" and "[SNAPSHOT_SKIP]" in event[1]["message"] for event in broadcaster.events)
+
+    asyncio.run(run())
+
+
+def test_bot_engine_uses_price_feed_as_oracle_fallback_and_publishes_decision_logs() -> None:
+    async def run() -> None:
+        client = FakeClient()
+        broadcaster = FakeBroadcaster()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            broadcaster=broadcaster,
+            scanner=ReversalScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=None,
+        )
+
+        first_summary = await engine.run_once()
+        summary = await engine.run_once()
+
+        log_messages = [event[1]["message"] for event in broadcaster.events if event[0] == "log"]
+        assert first_summary == {"scanned": 1, "evaluated": 1, "orders": 0, "skipped": 0}
+        assert summary == {"scanned": 1, "evaluated": 1, "orders": 1, "skipped": 0}
+        assert len(client.orders) == 1
+        assert any("[BET_EVAL]" in message for message in log_messages)
+        assert any("[BET_DECISION] action=APPROVED" in message for message in log_messages)
+        assert any("[ORDER_ATTEMPT]" in message for message in log_messages)
+        assert any(event[0] == "order_attempt" for event in broadcaster.events)
 
     asyncio.run(run())
 
@@ -315,6 +360,34 @@ def test_paper_order_skips_when_best_ask_has_no_size() -> None:
 
         assert summary["orders"] == 0
         assert client.orders == []
+
+    asyncio.run(run())
+
+
+def test_order_failure_does_not_crash_tick() -> None:
+    async def run() -> None:
+        broadcaster = FakeBroadcaster()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=FailingOrderClient(),
+            broadcaster=broadcaster,
+            scanner=BookReversalScanner(yes_ask_size=100.0),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+        )
+
+        await engine.run_once()
+        summary = await engine.run_once()
+
+        assert summary == {"scanned": 1, "evaluated": 1, "orders": 0, "skipped": 0}
+        assert engine.orders_placed == 0
+        assert engine.order_attempts == 1
+        assert engine.order_failures == 1
+        assert engine.last_error is not None
+        assert engine.last_order_failure == engine.last_error
+        assert "order failed YES BTC/15m" in engine.last_error
+        assert any(event[0] == "order_attempt" for event in broadcaster.events)
+        assert any(event[0] == "order_failed" for event in broadcaster.events)
 
     asyncio.run(run())
 

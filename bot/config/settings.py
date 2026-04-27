@@ -68,6 +68,9 @@ class Settings:
     external_wallet_address: str | None = None
     private_key: str | None = None
     api_key: str | None = None
+    api_secret: str | None = None
+    api_passphrase: str | None = None
+    api_key_address: str | None = None
     funder: str | None = None
     signature_type: int | None = None
     web_host: str = DEFAULT_WEB_HOST
@@ -78,6 +81,8 @@ class Settings:
     market_timeframes: tuple[str, ...] = ("5m", "15m", "1h")
     require_live_confirmation: bool = True
     price_feed_source: str = DEFAULT_PRICE_FEED_SOURCE
+    auto_start_bot: bool = False
+    bot_start_timeout_seconds: float = 20.0
 
     @classmethod
     def from_env(cls, load_dotenv: bool = True) -> "Settings":
@@ -100,6 +105,9 @@ class Settings:
             external_wallet_address=os.getenv("POLYMARKET_EXTERNAL_WALLET_ADDRESS") or None,
             private_key=os.getenv("POLYMARKET_PRIVATE_KEY") or None,
             api_key=os.getenv("POLYMARKET_API_KEY") or None,
+            api_secret=os.getenv("POLYMARKET_API_SECRET") or None,
+            api_passphrase=os.getenv("POLYMARKET_API_PASSPHRASE") or None,
+            api_key_address=os.getenv("POLYMARKET_API_KEY_ADDRESS") or os.getenv("RELAYER_API_KEY_ADDRESS") or None,
             funder=os.getenv("POLYMARKET_FUNDER") or None,
             signature_type=int(signature_type) if signature_type else None,
             web_host=os.getenv("WEB_HOST", DEFAULT_WEB_HOST),
@@ -110,4 +118,6 @@ class Settings:
             market_timeframes=_env_tuple("MARKET_TIMEFRAMES", ("5m", "15m", "1h")),
             require_live_confirmation=_env_bool("REQUIRE_LIVE_CONFIRMATION", True),
             price_feed_source=os.getenv("PRICE_FEED_SOURCE", DEFAULT_PRICE_FEED_SOURCE),
+            auto_start_bot=_env_bool("AUTO_START_BOT", False),
+            bot_start_timeout_seconds=float(os.getenv("BOT_START_TIMEOUT_SECONDS", "20")),
         )
