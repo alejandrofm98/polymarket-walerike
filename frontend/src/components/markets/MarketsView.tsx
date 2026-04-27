@@ -2,7 +2,7 @@ import { RefreshCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { EmptyState, AssetBadge } from "@/components/shared";
-import { MarketsTable } from "@/components/markets/MarketsTable";
+import { MarketsBentoGrid } from "@/components/markets/MarketsBentoGrid";
 import { formatSide, sideClass, formatMarketWindow } from "@/lib/utils2";
 import type { Market, Trade, Position } from "@/types";
 
@@ -45,7 +45,7 @@ export function MarketsView({
           </Button>
         }
       >
-        <MarketsTable markets={markets} />
+        <MarketsBentoGrid markets={markets} />
       </Section>
 
       {/* Positions */}

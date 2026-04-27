@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/Header";
 import { Sidebar } from "@/components/Sidebar";
 import { MarketsView } from "@/components/markets/MarketsView";
-import { AccountView } from "@/components/AccountView";
+import { AccountHeroPanel } from "@/components/AccountHeroPanel";
 import { SettingsView } from "@/components/SettingsView";
 import { LogsView } from "@/components/LogsView";
 import { api } from "@/lib/utils2";
@@ -314,7 +314,7 @@ function App() {
             />
           )}
           {activeView === "account" && (
-            <AccountView account={account} loading={loadingAccount} onRefresh={refreshAccount} />
+            <AccountHeroPanel account={account} loading={loadingAccount} />
           )}
           {activeView === "settings" && (
             <SettingsView
