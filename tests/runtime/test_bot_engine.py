@@ -37,7 +37,7 @@ class FakeScanner:
 
 class ReversalScanner:
     def __init__(self) -> None:
-        self.prices = [0.4, 0.43]
+        self.prices = [0.49, 0.4]
         self.calls = 0
 
     async def scan(self) -> list[MarketCandidate]:
@@ -60,7 +60,7 @@ class ReversalScanner:
 
 class BookReversalScanner:
     def __init__(self, yes_ask_size: float, *, include_asks: bool = True) -> None:
-        self.prices = [0.4, 0.43]
+        self.prices = [0.49, 0.4]
         self.calls = 0
         self.yes_ask_size = yes_ask_size
         self.include_asks = include_asks
@@ -82,6 +82,25 @@ class BookReversalScanner:
                 best_ask_down=0.5,
                 asks_up=asks_up,
                 asks_down=[{"price": 0.5, "size": 100.0}],
+            )
+        ]
+
+
+class StrictHedgePairScanner:
+    async def scan(self) -> list[MarketCandidate]:
+        return [
+            MarketCandidate(
+                market_id="btc-15m-pair",
+                question="Bitcoin up or down in 15m?",
+                asset="BTC",
+                timeframe="15m",
+                market_slug="btc-updown-15m-pair-test",
+                up_token_id="yes-token",
+                down_token_id="no-token",
+                best_ask_up=0.45,
+                best_ask_down=0.45,
+                asks_up=[{"price": 0.45, "size": 100.0}],
+                asks_down=[{"price": 0.45, "size": 100.0}],
             )
         ]
 
@@ -230,20 +249,21 @@ def test_bot_engine_lifecycle_and_single_paper_tick() -> None:
             oracle=FakeOracle(),
             scan_interval=60,
         )
+        engine.SCAN_CACHE_DURATION = 0
 
         first_summary = await engine.run_once()
         summary = await engine.run_once()
         await engine.close()
 
         assert first_summary == {"scanned": 1, "evaluated": 1, "orders": 0, "skipped": 0}
-        assert summary == {"scanned": 1, "evaluated": 1, "orders": 1, "skipped": 0}
-        assert len(client.orders) == 1
-        assert len(logger.records) == 1
+        assert summary == {"scanned": 1, "evaluated": 1, "orders": 2, "skipped": 0}
+        assert len(client.orders) == 2
+        assert len(logger.records) == 2
         assert price_feed.closed is True
-        assert engine.order_attempts == 1
+        assert engine.order_attempts == 2
         assert engine.order_failures == 0
         assert engine.last_order_attempt_at is not None
-        assert engine.status()["order_attempts"] == 1
+        assert engine.status()["order_attempts"] == 2
         assert any(event[0] == "order_attempt" for event in broadcaster.events)
         assert any(event[0] == "order_accepted" for event in broadcaster.events)
         assert any(event[0] == "order_placed" for event in broadcaster.events)
@@ -287,14 +307,15 @@ def test_bot_engine_uses_price_feed_as_oracle_fallback_and_publishes_decision_lo
             price_feed=FakePriceFeed(),
             oracle=None,
         )
+        engine.SCAN_CACHE_DURATION = 0
 
         first_summary = await engine.run_once()
         summary = await engine.run_once()
 
         log_messages = [event[1]["message"] for event in broadcaster.events if event[0] == "log"]
         assert first_summary == {"scanned": 1, "evaluated": 1, "orders": 0, "skipped": 0}
-        assert summary == {"scanned": 1, "evaluated": 1, "orders": 1, "skipped": 0}
-        assert len(client.orders) == 1
+        assert summary == {"scanned": 1, "evaluated": 1, "orders": 2, "skipped": 0}
+        assert len(client.orders) == 2
         assert any("[BET_EVAL]" in message for message in log_messages)
         assert any("[BET_DECISION] action=APPROVED" in message for message in log_messages)
         assert any("[ORDER_ATTEMPT]" in message for message in log_messages)
@@ -313,13 +334,37 @@ def test_paper_order_requires_sufficient_sell_liquidity() -> None:
             price_feed=FakePriceFeed(),
             oracle=FakeOracle(),
         )
+        engine.SCAN_CACHE_DURATION = 0
 
         await engine.run_once()
         summary = await engine.run_once()
 
-        assert summary["orders"] == 1
-        assert len(client.orders) == 1
-        assert client.orders[0].size == 5.0
+        assert summary["orders"] == 2
+        assert len(client.orders) == 2
+        assert {order.asset_id for order in client.orders} == {"yes-token", "no-token"}
+
+    asyncio.run(run())
+
+
+def test_bot_engine_places_both_legs_for_strict_hedge_pair() -> None:
+    async def run() -> None:
+        client = FakeClient()
+        logger = FakeLogger()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            trade_logger=logger,
+            scanner=StrictHedgePairScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+        )
+
+        summary = await engine.run_once()
+
+        assert summary["orders"] == 2
+        assert len(client.orders) == 2
+        assert {order.asset_id for order in client.orders} == {"yes-token", "no-token"}
+        assert {record.side for record in logger.records} == {"YES", "NO"}
 
     asyncio.run(run())
 
@@ -334,6 +379,7 @@ def test_paper_order_skips_when_sell_liquidity_below_threshold() -> None:
             price_feed=FakePriceFeed(),
             oracle=FakeOracle(),
         )
+        engine.SCAN_CACHE_DURATION = 0
 
         await engine.run_once()
         summary = await engine.run_once()
@@ -354,6 +400,7 @@ def test_paper_order_skips_when_best_ask_has_no_size() -> None:
             price_feed=FakePriceFeed(),
             oracle=FakeOracle(),
         )
+        engine.SCAN_CACHE_DURATION = 0
 
         await engine.run_once()
         summary = await engine.run_once()
@@ -375,6 +422,7 @@ def test_order_failure_does_not_crash_tick() -> None:
             price_feed=FakePriceFeed(),
             oracle=FakeOracle(),
         )
+        engine.SCAN_CACHE_DURATION = 0
 
         await engine.run_once()
         summary = await engine.run_once()

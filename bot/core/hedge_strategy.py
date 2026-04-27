@@ -160,6 +160,27 @@ class HedgeStrategy:
             reasons.append("hedge complete")
             return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons)
 
+        if snapshot.yes_liquidity < self.config.min_liquidity or snapshot.no_liquidity < self.config.min_liquidity:
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons)
+
+        if row.buy_count_yes >= self.config.max_buys_per_side or row.buy_count_no >= self.config.max_buys_per_side:
+            reasons.append("strict hedge pair max buys reached")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons)
+
+        effective_yes = snapshot.yes_price + self.fee_per_share(snapshot.yes_price, self.config.taker_fee_rate)
+        effective_no = snapshot.no_price + self.fee_per_share(snapshot.no_price, self.config.taker_fee_rate)
+        pair_cost = effective_yes + effective_no
+        if pair_cost > self.config.max_sum_avg:
+            reasons.append(f"strict hedge pair guard sum={pair_cost:.4f} max={self.config.max_sum_avg:.4f} includes_fee")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons)
+
+        size = min(capital_per_trade / pair_cost if pair_cost > 0 else 0.0, snapshot.yes_liquidity, snapshot.no_liquidity)
+        if size <= 0.0:
+            reasons.append("strict hedge pair size unavailable")
+            return HedgeSignal(HedgeMode.COPYTRADE, 0.0, 0.0, expected_margin, reasons)
+        reasons.append("strict hedge pair trigger")
+        return HedgeSignal(HedgeMode.COPYTRADE, size, size, expected_margin, reasons, target_side="BOTH")
+
         if not tracking.initialized or tracking.tracking_side is None:
             yes_below = snapshot.yes_price <= self.config.entry_threshold
             no_below = snapshot.no_price <= self.config.entry_threshold

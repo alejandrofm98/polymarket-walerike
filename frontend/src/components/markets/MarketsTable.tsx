@@ -16,23 +16,23 @@ export const MarketsTable = memo(function MarketsTable({ markets }: MarketsTable
 
   return (
     <div className="overflow-x-auto rounded-xl border border-white/8">
-      <table className="w-full text-sm">
+      <table className="w-full table-fixed text-sm">
         <thead>
           <tr className="border-b border-white/8 bg-white/[0.02]">
-            <Th>Asset</Th>
-            <Th>TF</Th>
-            <Th>Market</Th>
-            <Th>Target</Th>
-            <Th>Current</Th>
-            <Th>Diff</Th>
-            <Th>
+            <Th className="w-[88px]">Asset</Th>
+            <Th className="w-[64px]">TF</Th>
+            <Th className="w-[220px]">Market</Th>
+            <Th className="w-[92px]">Target</Th>
+            <Th className="w-[92px]">Current</Th>
+            <Th className="w-[100px]">Diff</Th>
+            <Th className="w-[150px]">
               <span className="text-emerald-400">YES</span>
               {" / "}
               <span className="text-red-400">NO</span>
             </Th>
-            <Th>Net Edge</Th>
-            <Th>Left</Th>
-            <Th>Status</Th>
+            <Th className="w-[104px]">Net Edge</Th>
+            <Th className="w-[72px]">Left</Th>
+            <Th className="w-[88px]">Status</Th>
           </tr>
         </thead>
         <tbody className="divide-y divide-white/5">
@@ -104,7 +104,7 @@ export const MarketsTable = memo(function MarketsTable({ markets }: MarketsTable
                 </td>
 
                 {/* Diff */}
-                <td className="px-3 py-3">
+                <td className="px-3 py-3 font-mono tabular-nums">
                   {diff != null ? (
                     <div className={cn("flex flex-col", diff >= 0 ? "text-emerald-400" : "text-red-400")}>
                       <span className="text-xs font-bold">
@@ -184,9 +184,9 @@ export const MarketsTable = memo(function MarketsTable({ markets }: MarketsTable
   );
 });
 
-function Th({ children }: { children: React.ReactNode }) {
+function Th({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+    <th className={cn("px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60", className)}>
       {children}
     </th>
   );

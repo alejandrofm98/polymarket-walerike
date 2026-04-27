@@ -231,13 +231,11 @@ class BotEngine:
         await self._publish("markets", {"markets": [market.to_dict() if hasattr(market, "to_dict") else asdict(market) for market in markets]})
         for market in markets:
             if self._market_has_ended(market):
-                await self._record_skip("market_ended", market, {"market_id": market.condition_id or market.market_id, "end_date": getattr(market, "end_date", None)})
                 summary["skipped"] += 1
                 self.skipped += 1
                 continue
             snapshot, snapshot_debug = self._snapshot_with_debug(market)
             if snapshot is None:
-                await self._record_skip(str(snapshot_debug.get("reason") or "snapshot_missing"), market, snapshot_debug)
                 summary["skipped"] += 1
                 self.skipped += 1
                 continue
@@ -247,7 +245,6 @@ class BotEngine:
             if result > 0:
                 break
         await self._publish("bot_tick", summary)
-        await self._log_event(f"tick scanned={summary['scanned']} evaluated={summary['evaluated']} orders={summary['orders']} skipped={summary['skipped']}")
         return summary
 
     def status(self) -> dict[str, Any]:
@@ -365,19 +362,11 @@ class BotEngine:
 
     async def _evaluate_and_order(self, snapshot: MarketSnapshot) -> int:
         mode = "PAPER" if self.paper else "LIVE"
-        await self._log_event(
-            f"[BET_EVAL] mode={mode} market={snapshot.market_id} asset={snapshot.asset}/{snapshot.timeframe} "
-            f"yes={snapshot.yes_price:.3f} no={snapshot.no_price:.3f} sum={snapshot.yes_price + snapshot.no_price:.3f} "
-            f"spot={snapshot.spot_price:.2f} oracle={snapshot.oracle_price:.2f} solo_log={self.solo_log} "
-            f"balance={self.account.balance:.2f} exposure={self.account.total_exposure:.2f}"
-        )
-        await self._log_event(f"[CHECK] {snapshot.asset}/{snapshot.timeframe} YES={snapshot.yes_price:.3f} NO={snapshot.no_price:.3f} SUM={snapshot.yes_price + snapshot.no_price:.3f}")
+        trade_key = f"{snapshot.market_id}:{snapshot.asset}:{snapshot.timeframe}"
 
         momentum = self._momentum(snapshot.asset)
         signal = self.strategy.evaluate(snapshot, self.capital_per_trade, momentum)
-        await self._log_event(f"[STRATEGY] mode={signal.mode.value} yes_size={signal.yes_size:.2f} no_size={signal.no_size:.2f} margin={signal.expected_margin:.4f} reasons={signal.reasons}")
 
-        trade_key = f"{snapshot.market_id}:{snapshot.asset}:{snapshot.timeframe}"
         decision = self.risk_manager.check_trade(
             market_id=snapshot.market_id,
             asset=snapshot.asset,
@@ -389,35 +378,31 @@ class BotEngine:
             trade_key=trade_key,
             signal_mode=signal.mode,
         )
-        strategy_state = self.strategy.state_snapshot(snapshot) if hasattr(self.strategy, "state_snapshot") else {}
-        await self._publish("bot_signal", {"snapshot": asdict(snapshot), "signal": asdict(signal), "risk": asdict(decision), "strategy_state": strategy_state})
 
-        if self.solo_log:
-            await self._log_event(f"[BET_DECISION] action=SOLO_LOG would_place={signal.yes_size + signal.no_size:.2f} trade_key={trade_key} reasons={signal.reasons}")
-            return 0
-        if signal.yes_size <= 0 and signal.no_size <= 0:
-            await self._log_event(f"[BET_DECISION] action=NO_ORDER trade_key={trade_key} reasons={signal.reasons} target_side={signal.target_side} strategy_state={strategy_state}")
-            return 0
-        if not decision.allowed:
-            await self._log_event(f"[BET_DECISION] action=RISK_DENIED trade_key={trade_key} requested={signal.yes_size + signal.no_size:.2f} adjusted={decision.adjusted_size} reasons={decision.reasons}")
+        if self.solo_log or signal.yes_size <= 0 and signal.no_size <= 0 or not decision.allowed:
             return 0
 
-        approved_side = "YES" if signal.yes_size > 0 else "NO" if signal.no_size > 0 else "NONE"
-        approved_size = signal.yes_size if signal.yes_size > 0 else signal.no_size
+        approved_side = "BOTH" if signal.yes_size > 0 and signal.no_size > 0 else "YES" if signal.yes_size > 0 else "NO" if signal.no_size > 0 else "NONE"
+        approved_size = signal.yes_size + signal.no_size
         approved_price = snapshot.yes_price if signal.yes_size > 0 else snapshot.no_price
-        approved_token = snapshot.yes_token_id if signal.yes_size > 0 else snapshot.no_token_id
+        approved_token = f"{snapshot.yes_token_id},{snapshot.no_token_id}" if approved_side == "BOTH" else snapshot.yes_token_id if signal.yes_size > 0 else snapshot.no_token_id
         await self._log_event(
             f"[BET_DECISION] action=APPROVED mode={mode} trade_key={trade_key} side={approved_side} "
             f"price={approved_price:.3f} size={approved_size:.2f} token_id={approved_token} reasons={signal.reasons} risk={decision.reasons}"
         )
         await self._log_event(f"[TRADE] APPROVED: placing {signal.yes_size:.2f} YES @ {snapshot.yes_price:.3f} and {signal.no_size:.2f} NO @ {snapshot.no_price:.3f} for {trade_key}")
         placed = 0
+        yes_placed = 0
         if signal.yes_size > 0:
             result = await self._place_leg(snapshot, snapshot.yes_token_id, OrderSide.BUY, snapshot.yes_price, signal.yes_size, "YES")
             placed += result
+            yes_placed = result
             if result and hasattr(self.strategy, "record_buy"):
                 self.strategy.record_buy(snapshot, "YES", snapshot.yes_price, signal.yes_size)
-        elif signal.no_size > 0:
+        if signal.yes_size > 0 and signal.no_size > 0 and not yes_placed:
+            await self._log_event(f"[BET_DECISION] action=PAIR_ABORTED trade_key={trade_key} reason=yes_leg_not_placed")
+            return placed
+        if signal.no_size > 0:
             result = await self._place_leg(snapshot, snapshot.no_token_id, OrderSide.BUY, snapshot.no_price, signal.no_size, "NO")
             placed += result
             if result and hasattr(self.strategy, "record_buy"):

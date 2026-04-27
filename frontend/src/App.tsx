@@ -4,7 +4,8 @@ import { Sidebar } from "@/components/Sidebar";
 import { MarketsView } from "@/components/markets/MarketsView";
 import { SettingsView } from "@/components/SettingsView";
 import { LogsView } from "@/components/LogsView";
-import { api, getMarketKey } from "@/lib/utils2";
+import { api } from "@/lib/utils2";
+import { mergeMarketTick } from "@/lib/marketMerge";
 import type {
   View,
   Runtime,
@@ -25,7 +26,7 @@ const emptyConfig: Config = {
   enabled_markets: {},
 };
 
-const MARKET_TICK_THROTTLE_MS = 200;
+const MARKET_TICK_THROTTLE_MS = 1000;
 
 function App() {
   const [activeView, setActiveView] = useState<View>("markets");
@@ -191,16 +192,7 @@ function App() {
       pendingMarketTick.current = null;
       if (!incoming) return;
       setMarkets((prev) => {
-        if (!prev?.length) return incoming;
-        const prevByKey = new Map(prev.map((m) => [getMarketKey(m), m]));
-        return incoming.map((m) => {
-          const key = getMarketKey(m);
-          const prevMarket = prevByKey.get(key);
-          if (prevMarket && m.price_to_beat == null && prevMarket.price_to_beat != null) {
-            return { ...m, price_to_beat: prevMarket.price_to_beat, target_price_source: prevMarket.target_price_source };
-          }
-          return m;
-        });
+        return mergeMarketTick(prev || [], incoming);
       });
     }
 
@@ -222,23 +214,13 @@ function App() {
       ws.onmessage = (message) => {
         try {
           const event = JSON.parse(message.data) as WsEvent;
-          if (event.type !== "market_tick")
-            log(event.type === "log" ? String(event.payload.message) : event.type);
-          if (event.type === "markets")
-            setMarkets((prev) => {
-              const incoming = event.payload.markets || [];
-              if (!prev?.length) return incoming;
-              const prevByKey = new Map(prev.map((m) => [getMarketKey(m), m]));
-              return incoming.map((m: Market) => {
-                const key = getMarketKey(m);
-                const prevMarket = prevByKey.get(key);
-                if (prevMarket && m.price_to_beat == null && prevMarket.price_to_beat != null) {
-                  return { ...m, price_to_beat: prevMarket.price_to_beat, target_price_source: prevMarket.target_price_source };
-                }
-                return m;
-              });
-            });
-          if (event.type === "market_tick")
+          if (event.type === "log") {
+            const msg = String(event.payload.message);
+            if (msg.includes("control") || msg.includes("started") || msg.includes("stopped") || msg.includes("paused") || msg.includes("order") || msg.includes("APPROVED") || msg.includes("placed") || msg.includes("attempt") || msg.includes("FAILED") || msg.includes("error") || msg.includes("ERROR")) {
+              log(msg);
+            }
+          }
+          if (event.type === "markets" || event.type === "market_tick")
             scheduleMarketTick(event.payload.markets || []);
           if (event.type === "positions") setPositions(event.payload.positions || []);
           if (event.type === "bot_status") setRuntime(event.payload || {});

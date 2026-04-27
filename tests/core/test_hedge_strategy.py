@@ -22,18 +22,45 @@ def _snapshot(**overrides: object) -> MarketSnapshot:
     return MarketSnapshot(**values)
 
 
-def test_copytrade_tracks_entry_then_buys_on_reversal() -> None:
+def test_copytrade_strict_hedge_does_not_buy_one_sided_reversal() -> None:
     strategy = HedgeStrategy()
     first = strategy.evaluate(_snapshot(yes_price=0.45), capital_per_trade=95.0, momentum_pct=0.0)
     signal = strategy.evaluate(_snapshot(yes_price=0.48), capital_per_trade=95.0, momentum_pct=0.0)
 
     assert first.mode is HedgeMode.COPYTRADE
     assert first.yes_size == 0
-    assert "tracking YES below entry threshold" in first.reasons
+    assert first.no_size == 0
+    assert any("strict hedge pair guard" in reason for reason in first.reasons)
     assert signal.mode is HedgeMode.COPYTRADE
-    assert signal.yes_size > 0
+    assert signal.yes_size == 0
     assert signal.no_size == 0
-    assert "reversal trigger" in signal.reasons
+    assert any("strict hedge pair guard" in reason for reason in signal.reasons)
+
+
+def test_copytrade_strict_hedge_buys_both_sides_when_pair_is_profitable() -> None:
+    signal = HedgeStrategy().evaluate(
+        _snapshot(yes_price=0.45, no_price=0.45),
+        capital_per_trade=90.0,
+        momentum_pct=0.0,
+    )
+
+    assert signal.mode is HedgeMode.COPYTRADE
+    assert signal.yes_size > 0.0
+    assert signal.no_size > 0.0
+    assert "strict hedge pair trigger" in signal.reasons
+
+
+def test_copytrade_strict_hedge_skips_when_pair_is_not_profitable() -> None:
+    signal = HedgeStrategy().evaluate(
+        _snapshot(yes_price=0.49, no_price=0.49),
+        capital_per_trade=100.0,
+        momentum_pct=0.0,
+    )
+
+    assert signal.mode is HedgeMode.COPYTRADE
+    assert signal.yes_size == 0.0
+    assert signal.no_size == 0.0
+    assert any("strict hedge pair guard" in reason for reason in signal.reasons)
 
 
 def test_copytrade_reports_soft_checks_without_momentum_hedge() -> None:
@@ -46,7 +73,6 @@ def test_copytrade_reports_soft_checks_without_momentum_hedge() -> None:
     assert signal.mode is HedgeMode.COPYTRADE
     assert signal.yes_size == 0.0
     assert signal.no_size == 0.0
-    assert "tracking NO below entry threshold" in signal.reasons
     assert "liquidity below threshold" in signal.reasons
     assert "oracle discrepancy above threshold" in signal.reasons
 
