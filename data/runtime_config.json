@@ -16,5 +16,44 @@
   "reversal_delta": 0.02,
   "second_side_buffer": 0.01,
   "second_side_time_threshold_ms": 200.0,
-  "solo_log": false
+  "solo_log": false,
+  "strategies": {
+    "fee_aware_pair_arbitrage": {
+      "assets": [
+        "BTC"
+      ],
+      "enabled": true,
+      "group": "conservative_btc_5m",
+      "timeframes": [
+        "5m"
+      ]
+    },
+    "high_confidence_near_expiry_side": {
+      "assets": [
+        "BTC"
+      ],
+      "enabled": false,
+      "group": "conservative_btc_5m",
+      "timeframes": [
+        "5m"
+      ]
+    },
+    "late_window_discount_hedge": {
+      "assets": [
+        "BTC"
+      ],
+      "enabled": true,
+      "group": "conservative_btc_5m",
+      "timeframes": [
+        "5m"
+      ]
+    }
+  },
+  "strategy_groups": {
+    "conservative_btc_5m": {
+      "capital_fraction": 1.0,
+      "enabled": true,
+      "max_orders_per_tick": 2
+    }
+  }
 }
