@@ -127,6 +127,25 @@ class BtcFiveMinuteDiscountScanner:
         ]
 
 
+class BtcFiveMinuteNoSignalScanner:
+    async def scan(self) -> list[MarketCandidate]:
+        return [
+            MarketCandidate(
+                market_id="btc-5m-no-signal",
+                question="Bitcoin up or down in 5m?",
+                asset="BTC",
+                timeframe="5m",
+                market_slug="btc-updown-5m-no-signal-test",
+                up_token_id="yes-token",
+                down_token_id="no-token",
+                best_ask_up=0.60,
+                best_ask_down=0.40,
+                asks_up=[{"price": 0.60, "size": 100.0}],
+                asks_down=[{"price": 0.40, "size": 100.0}],
+            )
+        ]
+
+
 class EmptyScanner:
     async def scan(self) -> list[MarketCandidate]:
         return []
@@ -463,6 +482,82 @@ def test_bot_engine_does_not_place_partial_pair_when_order_cap_is_one(tmp_path) 
 
         assert summary["orders"] == 0
         assert client.orders == []
+
+    asyncio.run(run())
+
+
+def test_bot_engine_logs_strategy_skip_when_scoped_strategy_has_no_signal(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update(
+            {
+                "strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 2, "capital_fraction": 1.0}},
+                "strategies": {
+                    "fee_aware_pair_arbitrage": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                },
+            }
+        )
+        broadcaster = FakeBroadcaster()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=FakeClient(),
+            broadcaster=broadcaster,
+            scanner=BtcFiveMinuteNoSignalScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        summary = await engine.run_once()
+
+        log_messages = [event[1]["message"] for event in broadcaster.events if event[0] == "log"]
+        assert summary["orders"] == 0
+        assert any(
+            "[BET_SKIP]" in message
+            and "strategy=fee_aware_pair_arbitrage" in message
+            and "requirement=effective_pair_cost<=0.980" in message
+            and "reason=pair_cost_too_high" in message
+            for message in log_messages
+        )
+
+    asyncio.run(run())
+
+
+def test_bot_engine_logs_strategy_skip_when_risk_rejects_signal(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update(
+            {
+                "capital_per_trade": 10,
+                "strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 2, "capital_fraction": 1.0}},
+                "strategies": {
+                    "late_window_discount_hedge": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                },
+            }
+        )
+        broadcaster = FakeBroadcaster()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=FakeClient(),
+            broadcaster=broadcaster,
+            scanner=BtcFiveMinuteDiscountScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+            initial_balance=0.0,
+        )
+
+        summary = await engine.run_once()
+
+        log_messages = [event[1]["message"] for event in broadcaster.events if event[0] == "log"]
+        assert summary["orders"] == 0
+        assert any(
+            "[BET_SKIP]" in message
+            and "strategy=late_window_discount_hedge" in message
+            and "reason=risk_rejected" in message
+            and "requirement=balance insufficient" in message
+            for message in log_messages
+        )
 
     asyncio.run(run())
 

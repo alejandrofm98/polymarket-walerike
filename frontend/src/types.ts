@@ -1,4 +1,4 @@
-export type View = "markets" | "account" | "settings" | "logs";
+export type View = "markets" | "account" | "settings";
 
 export type Runtime = {
   status?: string;

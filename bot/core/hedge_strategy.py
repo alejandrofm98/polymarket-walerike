@@ -62,6 +62,7 @@ class HedgeSignal:
     expected_margin: float
     reasons: list[str] = field(default_factory=list)
     target_side: str | None = None
+    strategy_name: str | None = None
 
 
 @dataclass(slots=True)

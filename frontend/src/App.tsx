@@ -1,11 +1,10 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/Header";
-import { Sidebar } from "@/components/Sidebar";
 import { MarketsView } from "@/components/markets/MarketsView";
 import { AccountHeroPanel } from "@/components/AccountHeroPanel";
 import { SettingsView } from "@/components/SettingsView";
-import { LogsView } from "@/components/LogsView";
 import { api } from "@/lib/utils2";
+import { shouldShowRealtimeLog } from "@/lib/logFiltering";
 import { mergeMarketTick } from "@/lib/marketMerge";
 import type {
   View,
@@ -240,7 +239,7 @@ function App() {
           const event = JSON.parse(message.data) as WsEvent;
           if (event.type === "log") {
             const msg = String(event.payload.message);
-            if (msg.includes("control") || msg.includes("started") || msg.includes("stopped") || msg.includes("paused") || msg.includes("order") || msg.includes("APPROVED") || msg.includes("placed") || msg.includes("attempt") || msg.includes("FAILED") || msg.includes("error") || msg.includes("ERROR")) {
+            if (shouldShowRealtimeLog(msg)) {
               log(msg);
             }
           }
@@ -294,15 +293,7 @@ function App() {
         activeMarkets={activeMarkets}
       />
 
-      <main className="grid gap-4 p-4 lg:grid-cols-[260px_minmax(0,1fr)] lg:p-6">
-        <Sidebar
-          runtime={runtime}
-          socketOnline={socketOnline}
-          open={summary.open}
-          closed={summary.closed}
-          pnl={summary.pnl}
-        />
-
+      <main className="p-4 lg:p-6">
         <section className="min-w-0 space-y-4">
           <AccountHeroPanel account={account} loading={loadingAccount} />
           {activeView === "markets" && (
@@ -310,8 +301,10 @@ function App() {
               markets={markets}
               trades={trades}
               positions={positions}
+              logs={logs}
               loadingMarkets={loadingMarkets}
               onRefresh={refreshMarkets}
+              onClearLogs={() => setLogs([])}
               onClearPositions={clearPositions}
               onClearTradeHistory={clearTradeHistory}
             />
@@ -328,7 +321,6 @@ function App() {
               onEnabledMarketChange={updateEnabledMarket}
             />
           )}
-          {activeView === "logs" && <LogsView logs={logs} onClear={() => setLogs([])} />}
         </section>
       </main>
     </div>

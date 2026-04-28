@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { EmptyState, AssetBadge } from "@/components/shared";
 import { MarketsBentoGrid } from "@/components/markets/MarketsBentoGrid";
+import { LogsView } from "@/components/LogsView";
 import { formatSide, sideClass, formatMarketWindow } from "@/lib/utils2";
 import type { Market, Trade, Position } from "@/types";
 
@@ -10,8 +11,10 @@ interface MarketsViewProps {
   markets: Market[];
   trades: Trade[];
   positions: Position[];
+  logs: string[];
   loadingMarkets: boolean;
   onRefresh: () => void;
+  onClearLogs: () => void;
   onClearPositions: () => void;
   onClearTradeHistory: () => void;
 }
@@ -20,77 +23,85 @@ export function MarketsView({
   markets,
   trades,
   positions,
+  logs,
   loadingMarkets,
   onRefresh,
+  onClearLogs,
   onClearPositions,
   onClearTradeHistory,
 }: MarketsViewProps) {
   const closedTrades = trades.filter((t) => t.status !== "OPEN");
   return (
-    <div className="space-y-4">
-      {/* Live Markets */}
-      <Section
-        title="Live Markets"
-        description="CLOB prices, edge and market status in real time"
-        action={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onRefresh}
-            disabled={loadingMarkets}
-            className="border-white/10 bg-white/[0.03] hover:bg-white/8"
-          >
-            <RefreshCcw className={cn("h-3.5 w-3.5", loadingMarkets && "animate-spin")} />
-            Refresh
-          </Button>
-        }
-      >
-        <MarketsBentoGrid markets={markets} />
-      </Section>
-
-      {/* Positions */}
-      <Section title="Open Positions" description={`${positions.length} position${positions.length !== 1 ? "s" : ""}`}>
-        {positions.length ? (
-          <div className="grid gap-2">
-            {positions.map((position, index) => (
-              <PositionRow key={`${position.market}-${index}`} position={position} markets={markets} />
-            ))}
-          </div>
-        ) : (
-          <EmptyState>No open positions</EmptyState>
-        )}
-      </Section>
-
-      {/* Trade History (Closed) */}
-      <Section
-        title="Trade History"
-        description={`${closedTrades.length} closed trade${closedTrades.length !== 1 ? "s" : ""}`}
-        action={
-          <div className="flex flex-wrap justify-end gap-2">
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="min-w-0 space-y-4">
+        {/* Live Markets */}
+        <Section
+          title="Live Markets"
+          description="CLOB prices, edge and market status in real time"
+          action={
             <Button
               variant="outline"
               size="sm"
-              onClick={onClearPositions}
-              className="border-white/10 bg-white/[0.03] text-xs hover:bg-white/8"
+              onClick={onRefresh}
+              disabled={loadingMarkets}
+              className="border-white/10 bg-white/[0.03] hover:bg-white/8"
             >
-              <Trash2 className="h-3.5 w-3.5" />
-              Clear Positions
+              <RefreshCcw className={cn("h-3.5 w-3.5", loadingMarkets && "animate-spin")} />
+              Refresh
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onClearTradeHistory}
-              disabled={!closedTrades.length}
-              className="border-red-500/30 bg-red-500/5 text-red-400 hover:bg-red-500/15 hover:text-red-300 text-xs"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              Clear All
-            </Button>
-          </div>
-        }
-      >
-        <TradesTable trades={closedTrades} markets={markets} />
-      </Section>
+          }
+        >
+          <MarketsBentoGrid markets={markets} />
+        </Section>
+
+        {/* Positions */}
+        <Section title="Open Positions" description={`${positions.length} position${positions.length !== 1 ? "s" : ""}`}>
+          {positions.length ? (
+            <div className="grid gap-2">
+              {positions.map((position, index) => (
+                <PositionRow key={`${position.market}-${index}`} position={position} markets={markets} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState>No open positions</EmptyState>
+          )}
+        </Section>
+
+        {/* Trade History (Closed) */}
+        <Section
+          title="Trade History"
+          description={`${closedTrades.length} closed trade${closedTrades.length !== 1 ? "s" : ""}`}
+          action={
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onClearPositions}
+                className="border-white/10 bg-white/[0.03] text-xs hover:bg-white/8"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Clear Positions
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onClearTradeHistory}
+                disabled={!closedTrades.length}
+                className="border-red-500/30 bg-red-500/5 text-red-400 hover:bg-red-500/15 hover:text-red-300 text-xs"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Clear All
+              </Button>
+            </div>
+          }
+        >
+          <TradesTable trades={closedTrades} markets={markets} />
+        </Section>
+      </div>
+
+      <aside className="min-w-0 xl:sticky xl:top-[128px] xl:self-start">
+        <LogsView logs={logs} onClear={onClearLogs} />
+      </aside>
     </div>
   );
 }

@@ -379,6 +379,13 @@ class BotEngine:
             f"yes={snapshot.yes_price:.3f} no={snapshot.no_price:.3f} momentum={momentum:.4f}"
         )
 
+        if not signals and has_registry_scope and self.strategy_registry is not None:
+            for diagnostic in self.strategy_registry.skip_diagnostics(snapshot):
+                await self._log_event(
+                    f"[BET_SKIP] mode={mode} trade_key={trade_key} strategy={diagnostic.get('strategy')} "
+                    f"reason={diagnostic.get('reason')} requirement={diagnostic.get('requirement')} actual={diagnostic.get('actual')}"
+                )
+
         placed = 0
         max_orders = self.strategy_registry.max_orders_per_tick() if self.strategy_registry is not None else 2
         for signal in signals:
@@ -404,7 +411,14 @@ class BotEngine:
             signal_mode=signal.mode,
         )
 
-        if self.solo_log or signal.yes_size <= 0 and signal.no_size <= 0 or not decision.allowed:
+        if self.solo_log or signal.yes_size <= 0 and signal.no_size <= 0:
+            return 0
+        if not decision.allowed:
+            await self._log_event(
+                f"[BET_SKIP] mode={mode} trade_key={trade_key} strategy={getattr(signal, 'strategy_name', None) or 'default'} "
+                f"reason=risk_rejected requirement={'; '.join(decision.reasons)} "
+                f"actual=requested_size={signal.yes_size + signal.no_size:.2f}"
+            )
             return 0
 
         adjusted_size = decision.adjusted_size
