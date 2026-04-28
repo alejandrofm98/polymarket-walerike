@@ -27,7 +27,7 @@ class HedgeConfig:
     second_side_buffer: float = 0.01
     second_side_time_threshold_ms: float = 200.0
     dynamic_threshold_boost: float = 0.04
-    min_liquidity: float = 50.0
+    min_liquidity: float = 10.0
     max_oracle_discrepancy_pct: float = 1.0
     momentum_threshold_pct: float = 0.25
     hedge_bias_fraction: float = 0.65

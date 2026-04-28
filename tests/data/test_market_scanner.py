@@ -34,6 +34,15 @@ class FakeBookClient:
         ]
 
 
+class ComplementBookClient:
+    async def fetch_order_books(self, token_ids: list[str]) -> list[dict[str, object]]:
+        assert token_ids == ["token-up", "token-down"]
+        return [
+            {"asset_id": "token-up", "bids": [], "asks": []},
+            {"asset_id": "token-down", "bids": [{"price": "0.40", "size": "75"}], "asks": []},
+        ]
+
+
 def test_filter_crypto_up_down_markets_from_loose_payload() -> None:
     scanner = MarketScanner(FakeClient())
 
@@ -113,6 +122,17 @@ def test_book_normalization_and_mirror_math() -> None:
     assert candidate.spread == 0.03
     assert candidate.edge == -0.03
     assert candidate.net_edge == -0.0654
+
+
+def test_book_enrichment_mirrors_complementary_bid_liquidity_into_asks() -> None:
+    scanner = MarketScanner(ComplementBookClient())
+    candidate = scanner.parse_gamma_event(gamma_event("btc-updown-5m-1777069800"))
+    assert candidate is not None
+
+    asyncio.run(scanner._enrich_books([candidate]))
+
+    assert candidate.asks_up == [{"price": 0.6, "size": 75.0}]
+    assert candidate.best_ask_up == 0.6
 
 
 def test_scan_gamma_uses_enabled_pairs_and_dedupes() -> None:

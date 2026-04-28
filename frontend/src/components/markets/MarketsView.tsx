@@ -32,7 +32,7 @@ export function MarketsView({
 }: MarketsViewProps) {
   const closedTrades = trades.filter((t) => t.status !== "OPEN");
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_420px]">
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_460px] 2xl:grid-cols-[minmax(0,1fr)_560px]">
       <div className="min-w-0 space-y-4">
         {/* Live Markets */}
         <Section

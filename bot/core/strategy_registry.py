@@ -80,10 +80,10 @@ class StrategyRegistry:
         pair_cost = self._effective_pair_cost(snapshot)
         if pair_cost > 0.98:
             return [{"strategy": "fee_aware_pair_arbitrage", "reason": "pair_cost_too_high", "requirement": "effective_pair_cost<=0.980", "actual": f"{pair_cost:.3f}"}]
-        if snapshot.yes_liquidity < 50.0:
-            return [{"strategy": "fee_aware_pair_arbitrage", "reason": "yes_liquidity_too_low", "requirement": "yes_liquidity>=50.000", "actual": f"{snapshot.yes_liquidity:.3f}"}]
-        if snapshot.no_liquidity < 50.0:
-            return [{"strategy": "fee_aware_pair_arbitrage", "reason": "no_liquidity_too_low", "requirement": "no_liquidity>=50.000", "actual": f"{snapshot.no_liquidity:.3f}"}]
+        if snapshot.yes_liquidity < 10.0:
+            return [{"strategy": "fee_aware_pair_arbitrage", "reason": "yes_liquidity_too_low", "requirement": "yes_liquidity>=10.000", "actual": f"{snapshot.yes_liquidity:.3f}"}]
+        if snapshot.no_liquidity < 10.0:
+            return [{"strategy": "fee_aware_pair_arbitrage", "reason": "no_liquidity_too_low", "requirement": "no_liquidity>=10.000", "actual": f"{snapshot.no_liquidity:.3f}"}]
         return []
 
     def _late_window_discount_hedge_skips(self, snapshot: MarketSnapshot) -> list[dict[str, Any]]:
@@ -114,18 +114,18 @@ class StrategyRegistry:
         if snapshot.spot_price > snapshot.price_to_beat:
             if snapshot.yes_price > 0.80:
                 return [{"strategy": "high_confidence_near_expiry_side", "reason": "yes_price_too_high", "requirement": "yes_price<=0.800", "actual": f"{snapshot.yes_price:.3f}"}]
-            if snapshot.yes_liquidity < 50.0:
-                return [{"strategy": "high_confidence_near_expiry_side", "reason": "yes_liquidity_too_low", "requirement": "yes_liquidity>=50.000", "actual": f"{snapshot.yes_liquidity:.3f}"}]
+            if snapshot.yes_liquidity < 10.0:
+                return [{"strategy": "high_confidence_near_expiry_side", "reason": "yes_liquidity_too_low", "requirement": "yes_liquidity>=10.000", "actual": f"{snapshot.yes_liquidity:.3f}"}]
         if snapshot.spot_price < snapshot.price_to_beat:
             if snapshot.no_price > 0.80:
                 return [{"strategy": "high_confidence_near_expiry_side", "reason": "no_price_too_high", "requirement": "no_price<=0.800", "actual": f"{snapshot.no_price:.3f}"}]
-            if snapshot.no_liquidity < 50.0:
-                return [{"strategy": "high_confidence_near_expiry_side", "reason": "no_liquidity_too_low", "requirement": "no_liquidity>=50.000", "actual": f"{snapshot.no_liquidity:.3f}"}]
+            if snapshot.no_liquidity < 10.0:
+                return [{"strategy": "high_confidence_near_expiry_side", "reason": "no_liquidity_too_low", "requirement": "no_liquidity>=10.000", "actual": f"{snapshot.no_liquidity:.3f}"}]
         return []
 
     def _fee_aware_pair_arbitrage(self, snapshot: MarketSnapshot, capital: float) -> HedgeSignal | None:
         pair_cost = self._effective_pair_cost(snapshot)
-        if pair_cost > 0.98 or snapshot.yes_liquidity < 50.0 or snapshot.no_liquidity < 50.0:
+        if pair_cost > 0.98 or snapshot.yes_liquidity < 10.0 or snapshot.no_liquidity < 10.0:
             return None
         size = min(capital / pair_cost, snapshot.yes_liquidity, snapshot.no_liquidity)
         return HedgeSignal(HedgeMode.COPYTRADE, size, size, 0.98 - pair_cost, ["fee-aware pair arbitrage"], target_side="BOTH")
@@ -146,9 +146,9 @@ class StrategyRegistry:
         distance_pct = abs(snapshot.spot_price - snapshot.price_to_beat) / snapshot.price_to_beat * 100.0 if snapshot.price_to_beat else 0.0
         if distance_pct < 0.5:
             return None
-        if snapshot.spot_price > snapshot.price_to_beat and snapshot.yes_price <= 0.80 and snapshot.yes_liquidity >= 50.0:
+        if snapshot.spot_price > snapshot.price_to_beat and snapshot.yes_price <= 0.80 and snapshot.yes_liquidity >= 10.0:
             return HedgeSignal(HedgeMode.HEDGE_BIASED_UP, capital / snapshot.yes_price, 0.0, distance_pct, ["high-confidence near-expiry side"], target_side="YES")
-        if snapshot.spot_price < snapshot.price_to_beat and snapshot.no_price <= 0.80 and snapshot.no_liquidity >= 50.0:
+        if snapshot.spot_price < snapshot.price_to_beat and snapshot.no_price <= 0.80 and snapshot.no_liquidity >= 10.0:
             return HedgeSignal(HedgeMode.HEDGE_BIASED_DOWN, 0.0, capital / snapshot.no_price, distance_pct, ["high-confidence near-expiry side"], target_side="NO")
         return None
 

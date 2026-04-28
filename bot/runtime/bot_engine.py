@@ -23,6 +23,12 @@ from bot.data.market_scanner import MarketCandidate, MarketScanner
 from bot.data.trade_logger import TradeLogger, TradeRecord
 
 
+def sanitize_log_message(message: str) -> str:
+    message = re.sub(r"\bmode=\S+\s*", "", message)
+    message = re.sub(r"\btrade_key=\S+:([A-Z]+:[A-Za-z0-9]+)", r"market=\1", message)
+    return re.sub(r"\s{2,}", " ", message).strip()
+
+
 class BotEngine:
     """Small lifecycle wrapper for paper/live bot execution."""
 
@@ -1026,6 +1032,7 @@ class BotEngine:
             await self.broadcaster.publish(event_type, payload)
 
     async def _log_event(self, message: str, *, level: str = "info") -> None:
+        message = sanitize_log_message(message)
         log_method = getattr(self.logger, level, self.logger.info)
         log_method(message)
         await self._publish("log", {"level": level, "message": message})

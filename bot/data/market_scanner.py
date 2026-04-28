@@ -602,6 +602,12 @@ class MarketScanner:
 
     @staticmethod
     def _mirror_books(candidate: MarketCandidate) -> None:
+        if not candidate.asks_down and candidate.bids_up:
+            candidate.asks_down = MarketScanner._complement_levels(candidate.bids_up)
+            candidate.best_ask_down = candidate.asks_down[0]["price"] if candidate.asks_down else candidate.best_ask_down
+        if not candidate.asks_up and candidate.bids_down:
+            candidate.asks_up = MarketScanner._complement_levels(candidate.bids_down)
+            candidate.best_ask_up = candidate.asks_up[0]["price"] if candidate.asks_up else candidate.best_ask_up
         if candidate.best_ask_down is None and candidate.best_bid_up is not None:
             candidate.best_ask_down = round(1 - candidate.best_bid_up, 6)
         if candidate.best_bid_down is None and candidate.best_ask_up is not None:
@@ -610,6 +616,11 @@ class MarketScanner:
             candidate.best_ask_up = round(1 - candidate.best_bid_down, 6)
         if candidate.best_bid_up is None and candidate.best_ask_down is not None:
             candidate.best_bid_up = round(1 - candidate.best_ask_down, 6)
+
+    @staticmethod
+    def _complement_levels(levels: list[dict[str, float]]) -> list[dict[str, float]]:
+        mirrored = [{"price": round(1 - level["price"], 6), "size": level["size"]} for level in levels]
+        return sorted(mirrored, key=lambda level: level["price"])
 
     @staticmethod
     def _spread(candidate: MarketCandidate) -> float | None:

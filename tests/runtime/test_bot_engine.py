@@ -12,6 +12,19 @@ from bot.data.market_scanner import MarketCandidate
 from bot.data.price_aggregator import OraclePrice
 from bot.data.trade_logger import TradeLogger, TradeRecord
 from bot.runtime import BotEngine
+from bot.runtime.bot_engine import sanitize_log_message
+
+
+def test_sanitize_log_message_removes_mode_and_shortens_trade_key() -> None:
+    message = (
+        "[BET_SKIP] mode=LIVE trade_key=0x6e1df8bb810dcdcdd57c4d5c43262f45967bc7ff170e303a90915f1c9200aeaf:BTC:5m "
+        "strategy=fee_aware_pair_arbitrage reason=no_liquidity_too_low requirement=no_liquidity>=10.000 actual=0.000"
+    )
+
+    assert sanitize_log_message(message) == (
+        "[BET_SKIP] market=BTC:5m strategy=fee_aware_pair_arbitrage reason=no_liquidity_too_low "
+        "requirement=no_liquidity>=10.000 actual=0.000"
+    )
 
 
 @dataclass(slots=True)
