@@ -18,3 +18,4 @@ frontend/dist/
 .superpowers/
 frontend/tsconfig.tsbuildinfo
 frontend/tsconfig.node.tsbuildinfo
+docs/*
