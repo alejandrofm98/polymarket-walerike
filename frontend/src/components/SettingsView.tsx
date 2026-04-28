@@ -9,6 +9,23 @@ import type { Config, Runtime } from "@/types";
 
 const assets = ["BTC", "ETH", "SOL"];
 const timeframes = ["5m", "15m", "1h"];
+const strategyLabels: Record<string, { title: string; description: string; risk: string }> = {
+  fee_aware_pair_arbitrage: {
+    title: "Fee-aware pair arbitrage",
+    description: "Buys UP + DOWN only when fee-adjusted pair cost stays cheap.",
+    risk: "Conservative",
+  },
+  late_window_discount_hedge: {
+    title: "Late-window discount hedge",
+    description: "Near expiry pair entry when one side is temporarily discounted.",
+    risk: "Conservative",
+  },
+  high_confidence_near_expiry_side: {
+    title: "High-confidence near-expiry side",
+    description: "Directional UP/DOWN entry only when spot is far from target near close.",
+    risk: "Strict directional",
+  },
+};
 
 interface SettingsViewProps {
   config: Config;
@@ -25,6 +42,28 @@ export function SettingsView({ config, runtime, setConfig, onSubmit, onEnabledMa
 
   const liveRequested = config.paper_mode === false;
   const liveBlocked = runtime.live_blocked === true || (liveRequested && runtime.live_trading === false);
+  const strategyGroups = config.strategy_groups || {};
+  const strategies = config.strategies || {};
+
+  function setStrategyGroupEnabled(groupName: string, enabled: boolean) {
+    setConfig((current) => ({
+      ...current,
+      strategy_groups: {
+        ...current.strategy_groups,
+        [groupName]: { ...current.strategy_groups[groupName], enabled },
+      },
+    }));
+  }
+
+  function setStrategyEnabled(strategyName: string, enabled: boolean) {
+    setConfig((current) => ({
+      ...current,
+      strategies: {
+        ...current.strategies,
+        [strategyName]: { ...current.strategies[strategyName], enabled },
+      },
+    }));
+  }
 
   return (
     <form className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]" onSubmit={onSubmit}>
@@ -139,8 +178,9 @@ export function SettingsView({ config, runtime, setConfig, onSubmit, onEnabledMa
         </div>
       </div>
 
-      {/* Markets Matrix */}
-      <div className="rounded-xl border border-white/8 bg-white/[0.02] backdrop-blur">
+      <div className="grid gap-4">
+        {/* Markets Matrix */}
+        <div className="rounded-xl border border-white/8 bg-white/[0.02] backdrop-blur">
         <div className="border-b border-white/5 px-5 py-4">
           <h2 className="text-sm font-semibold text-foreground">Markets Matrix</h2>
           <p className="mt-0.5 text-xs text-muted-foreground/60">Select asset / timeframe pairs to scan.</p>
@@ -174,8 +214,60 @@ export function SettingsView({ config, runtime, setConfig, onSubmit, onEnabledMa
           </div>
         </div>
       </div>
+
+        {/* Strategy Groups */}
+        <div className="rounded-xl border border-white/8 bg-white/[0.02] backdrop-blur">
+          <div className="border-b border-white/5 px-5 py-4">
+            <h2 className="text-sm font-semibold text-foreground">Strategy Groups</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground/60">Enable groups or individual BTC 5m strategies.</p>
+          </div>
+          <div className="space-y-4 p-5">
+            {Object.entries(strategyGroups).map(([groupName, group]) => (
+              <div key={groupName} className="rounded-xl border border-white/8 bg-black/20 p-4">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-widest text-foreground">{humanize(groupName)}</div>
+                    <p className="mt-1 text-[11px] text-muted-foreground/60">
+                      Max {group.max_orders_per_tick} orders/tick · {Math.round(group.capital_fraction * 100)}% capital
+                    </p>
+                  </div>
+                  <Switch checked={group.enabled} onCheckedChange={(checked) => setStrategyGroupEnabled(groupName, checked)} />
+                </div>
+
+                <div className="space-y-2">
+                  {Object.entries(strategies)
+                    .filter(([, strategy]) => strategy.group === groupName)
+                    .map(([strategyName, strategy]) => {
+                      const label = strategyLabels[strategyName] || { title: humanize(strategyName), description: "Runtime strategy", risk: "Custom" };
+                      return (
+                        <div key={strategyName} className="rounded-lg border border-white/8 bg-white/[0.02] p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-xs font-semibold text-foreground">{label.title}</div>
+                              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">{label.description}</p>
+                              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground/50">
+                                <span className="rounded-full border border-white/8 px-2 py-0.5">{label.risk}</span>
+                                <span className="rounded-full border border-white/8 px-2 py-0.5">{strategy.assets.join(",")}</span>
+                                <span className="rounded-full border border-white/8 px-2 py-0.5">{strategy.timeframes.join(",")}</span>
+                              </div>
+                            </div>
+                            <Switch checked={strategy.enabled} onCheckedChange={(checked) => setStrategyEnabled(strategyName, checked)} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </form>
   );
+}
+
+function humanize(value: string) {
+  return value.replace(/_/g, " ");
 }
 
 function SettingField({

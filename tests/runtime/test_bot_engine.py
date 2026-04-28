@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from bot.config.settings import Settings
+from bot.config.runtime_config import RuntimeConfigStore
 from bot.core.polymarket_client import OrderResponse
 from bot.data.market_scanner import MarketCandidate
 from bot.data.price_aggregator import OraclePrice
@@ -101,6 +102,27 @@ class StrictHedgePairScanner:
                 best_ask_down=0.45,
                 asks_up=[{"price": 0.45, "size": 100.0}],
                 asks_down=[{"price": 0.45, "size": 100.0}],
+            )
+        ]
+
+
+class BtcFiveMinuteDiscountScanner:
+    async def scan(self) -> list[MarketCandidate]:
+        return [
+            MarketCandidate(
+                market_id="btc-5m-discount",
+                question="Bitcoin up or down in 5m?",
+                asset="BTC",
+                timeframe="5m",
+                market_slug="btc-updown-5m-discount-test",
+                up_token_id="yes-token",
+                down_token_id="no-token",
+                best_ask_up=0.38,
+                best_ask_down=0.50,
+                asks_up=[{"price": 0.38, "size": 100.0}],
+                asks_down=[{"price": 0.50, "size": 100.0}],
+                end_date=(datetime.now(timezone.utc) + timedelta(seconds=45)).isoformat(),
+                price_to_beat=100.0,
             )
         ]
 
@@ -365,6 +387,82 @@ def test_bot_engine_places_both_legs_for_strict_hedge_pair() -> None:
         assert len(client.orders) == 2
         assert {order.asset_id for order in client.orders} == {"yes-token", "no-token"}
         assert {record.side for record in logger.records} == {"YES", "NO"}
+
+    asyncio.run(run())
+
+
+def test_bot_engine_executes_multiple_enabled_strategy_signals(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update(
+            {
+                "capital_per_trade": 10,
+                "strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 4, "capital_fraction": 1.0}},
+                "strategies": {
+                    "fee_aware_pair_arbitrage": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                    "late_window_discount_hedge": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                },
+            }
+        )
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            scanner=BtcFiveMinuteDiscountScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        summary = await engine.run_once()
+
+        assert summary["orders"] == 4
+        assert len(client.orders) == 4
+        assert [order.asset_id for order in client.orders] == ["yes-token", "no-token", "yes-token", "no-token"]
+
+    asyncio.run(run())
+
+
+def test_bot_engine_does_not_fallback_when_matching_strategy_group_disabled(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update({"strategy_groups": {"conservative_btc_5m": {"enabled": False, "max_orders_per_tick": 2, "capital_fraction": 1.0}}})
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            scanner=BtcFiveMinuteDiscountScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        summary = await engine.run_once()
+
+        assert summary["orders"] == 0
+        assert client.orders == []
+
+    asyncio.run(run())
+
+
+def test_bot_engine_does_not_place_partial_pair_when_order_cap_is_one(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update({"strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 1, "capital_fraction": 1.0}}})
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            scanner=BtcFiveMinuteDiscountScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        summary = await engine.run_once()
+
+        assert summary["orders"] == 0
+        assert client.orders == []
 
     asyncio.run(run())
 

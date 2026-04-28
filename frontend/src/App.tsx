@@ -26,6 +26,8 @@ const emptyConfig: Config = {
   max_buys_per_side: 1,
   paper_mode: true,
   enabled_markets: {},
+  strategy_groups: {},
+  strategies: {},
 };
 
 const MARKET_TICK_THROTTLE_MS = 1000;
@@ -301,7 +303,8 @@ function App() {
           pnl={summary.pnl}
         />
 
-        <section className="min-w-0">
+        <section className="min-w-0 space-y-4">
+          <AccountHeroPanel account={account} loading={loadingAccount} />
           {activeView === "markets" && (
             <MarketsView
               markets={markets}

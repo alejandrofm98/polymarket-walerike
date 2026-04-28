@@ -15,3 +15,6 @@ frontend/dist/
 .idea
 /opencode.json
 .worktrees/
+.superpowers/
+frontend/tsconfig.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo

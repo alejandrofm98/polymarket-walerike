@@ -18,6 +18,7 @@ from bot.config.settings import Settings
 from bot.core.hedge_strategy import HedgeStrategy, MarketSnapshot
 from bot.core.polymarket_client import OrderRequest, OrderSide, OrderType, PolymarketClient
 from bot.core.risk_manager import AccountRiskState, RiskManager
+from bot.core.strategy_registry import StrategyRegistry
 from bot.data.market_scanner import MarketCandidate, MarketScanner
 from bot.data.trade_logger import TradeLogger, TradeRecord
 
@@ -38,6 +39,7 @@ class BotEngine:
         oracle: Any | None = None,
         risk_manager: RiskManager | None = None,
         strategy: HedgeStrategy | None = None,
+        strategy_registry: StrategyRegistry | None = None,
         paper: bool | None = None,
         scan_interval: float = 0.1,
         realtime_interval: float = 0.5,
@@ -56,6 +58,7 @@ class BotEngine:
         self.oracle = oracle
         self.risk_manager = risk_manager or RiskManager()
         self.strategy = strategy or HedgeStrategy()
+        self.strategy_registry = strategy_registry or StrategyRegistry()
         self.scan_interval = scan_interval
         self.realtime_interval = realtime_interval
         self.capital_per_trade = capital_per_trade
@@ -236,6 +239,7 @@ class BotEngine:
                 continue
             snapshot, snapshot_debug = self._snapshot_with_debug(market)
             if snapshot is None:
+                await self._record_skip(str(snapshot_debug.get("reason") or "snapshot_missing"), market, snapshot_debug)
                 summary["skipped"] += 1
                 self.skipped += 1
                 continue
@@ -365,7 +369,28 @@ class BotEngine:
         trade_key = f"{snapshot.market_id}:{snapshot.asset}:{snapshot.timeframe}"
 
         momentum = self._momentum(snapshot.asset)
-        signal = self.strategy.evaluate(snapshot, self.capital_per_trade, momentum)
+        signals = self.strategy_registry.evaluate(snapshot, self.capital_per_trade, momentum) if self.strategy_registry is not None else []
+        has_registry_scope = bool(self.strategy_registry is not None and self.strategy_registry.has_strategy_scope(snapshot))
+        if not signals and not has_registry_scope:
+            signals = [self.strategy.evaluate(snapshot, self.capital_per_trade, momentum)]
+
+        await self._log_event(
+            f"[BET_EVAL] mode={mode} trade_key={trade_key} strategies={len(signals)} "
+            f"yes={snapshot.yes_price:.3f} no={snapshot.no_price:.3f} momentum={momentum:.4f}"
+        )
+
+        placed = 0
+        max_orders = self.strategy_registry.max_orders_per_tick() if self.strategy_registry is not None else 2
+        for signal in signals:
+            if placed >= max_orders:
+                break
+            placed += await self._execute_signal(snapshot, signal, mode, trade_key, max_orders - placed)
+        return placed
+
+    async def _execute_signal(self, snapshot: MarketSnapshot, signal: Any, mode: str, trade_key: str, remaining_orders: int) -> int:
+        if signal.yes_size > 0 and signal.no_size > 0 and remaining_orders < 2:
+            await self._log_event(f"[BET_DECISION] action=PAIR_SKIPPED trade_key={trade_key} reason=order_cap_insufficient")
+            return 0
 
         decision = self.risk_manager.check_trade(
             market_id=snapshot.market_id,
@@ -382,6 +407,13 @@ class BotEngine:
         if self.solo_log or signal.yes_size <= 0 and signal.no_size <= 0 or not decision.allowed:
             return 0
 
+        adjusted_size = decision.adjusted_size
+        requested_size = signal.yes_size + signal.no_size
+        if adjusted_size is not None and 0 < adjusted_size < requested_size:
+            scale = adjusted_size / requested_size
+            signal.yes_size *= scale
+            signal.no_size *= scale
+
         approved_side = "BOTH" if signal.yes_size > 0 and signal.no_size > 0 else "YES" if signal.yes_size > 0 else "NO" if signal.no_size > 0 else "NONE"
         approved_size = signal.yes_size + signal.no_size
         approved_price = snapshot.yes_price if signal.yes_size > 0 else snapshot.no_price
@@ -393,7 +425,7 @@ class BotEngine:
         await self._log_event(f"[TRADE] APPROVED: placing {signal.yes_size:.2f} YES @ {snapshot.yes_price:.3f} and {signal.no_size:.2f} NO @ {snapshot.no_price:.3f} for {trade_key}")
         placed = 0
         yes_placed = 0
-        if signal.yes_size > 0:
+        if signal.yes_size > 0 and remaining_orders > placed:
             result = await self._place_leg(snapshot, snapshot.yes_token_id, OrderSide.BUY, snapshot.yes_price, signal.yes_size, "YES")
             placed += result
             yes_placed = result
@@ -402,7 +434,7 @@ class BotEngine:
         if signal.yes_size > 0 and signal.no_size > 0 and not yes_placed:
             await self._log_event(f"[BET_DECISION] action=PAIR_ABORTED trade_key={trade_key} reason=yes_leg_not_placed")
             return placed
-        if signal.no_size > 0:
+        if signal.no_size > 0 and remaining_orders > placed:
             result = await self._place_leg(snapshot, snapshot.no_token_id, OrderSide.BUY, snapshot.no_price, signal.no_size, "NO")
             placed += result
             if result and hasattr(self.strategy, "record_buy"):
@@ -1007,6 +1039,8 @@ class BotEngine:
                 self.strategy.config.second_side_buffer = float(config.second_side_buffer)
                 self.strategy.config.second_side_time_threshold_ms = float(config.second_side_time_threshold_ms)
                 self.strategy.config.dynamic_threshold_boost = float(config.dynamic_threshold_boost)
+            if hasattr(self.strategy_registry, "configure"):
+                self.strategy_registry.configure(config.strategy_groups, config.strategies)
             if hasattr(self.risk_manager, "config"):
                 self.risk_manager.config.min_yes_no_sum = 1.0 - float(config.min_margin_for_arbitrage)
                 self.risk_manager.config.hedge_min_yes_no_sum = 2.0 - float(config.min_margin_for_arbitrage)

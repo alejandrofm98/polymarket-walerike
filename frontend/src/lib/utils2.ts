@@ -3,6 +3,17 @@ export function formatNumber(value: unknown, digits: number) {
   return Number.isFinite(number) ? number.toFixed(digits) : "";
 }
 
+function toMoneyNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+export function calculateAccountBalance(account: { cash_balance?: unknown; portfolio_value?: unknown }) {
+  const cash = toMoneyNumber(account.cash_balance);
+  const portfolio = toMoneyNumber(account.portfolio_value);
+  return { cash, portfolio, total: cash + portfolio };
+}
+
 export function formatBidAsk(_bid?: number | null, ask?: number | null) {
   return formatNumber(ask, 3) || "-";
 }
@@ -17,6 +28,22 @@ export function formatChartTime(value: unknown) {
   const time = Number(value);
   if (!Number.isFinite(time)) return "";
   return new Date(time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+export function formatTimeRemaining(value: unknown) {
+  if (value == null || value === "") return "";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+
+  const totalSeconds = Math.max(0, Math.floor(number));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const paddedMinutes = String(minutes).padStart(2, "0");
+  const paddedSeconds = String(seconds).padStart(2, "0");
+
+  if (hours > 0) return `${hours}:${paddedMinutes}:${paddedSeconds}`;
+  return `${paddedMinutes}:${paddedSeconds}`;
 }
 
 export function formatSide(side?: string) {
@@ -90,7 +117,7 @@ export function formatMarketWindow(data: {
 
   const end = start + duration;
   const fmt = new Intl.DateTimeFormat("en-US", {
-    month: "short",
+    month: "long",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",

@@ -46,3 +46,44 @@ def test_runtime_config_rejects_bad_ranges(tmp_path) -> None:  # type: ignore[no
 
     with pytest.raises(ValueError, match="timeframe"):
         store.update({"enabled_markets": {"BTC": ["4h"]}})
+
+
+def test_runtime_config_defaults_strategy_groups(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+
+    config = store.load()
+
+    assert config.strategy_groups["conservative_btc_5m"]["enabled"] is True
+    assert config.strategy_groups["conservative_btc_5m"]["max_orders_per_tick"] == 2
+    assert config.strategies["fee_aware_pair_arbitrage"]["enabled"] is True
+    assert config.strategies["late_window_discount_hedge"]["enabled"] is False
+    assert config.strategies["high_confidence_near_expiry_side"]["enabled"] is False
+
+
+def test_runtime_config_validates_strategy_shapes(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+
+    config = store.update(
+        {
+            "strategy_groups": {"conservative_btc_5m": {"enabled": False, "max_orders_per_tick": 1, "capital_fraction": 0.5}},
+            "strategies": {
+                "fee_aware_pair_arbitrage": {
+                    "enabled": True,
+                    "group": "conservative_btc_5m",
+                    "assets": ["btc"],
+                    "timeframes": ["5M"],
+                }
+            },
+        }
+    )
+
+    assert config.strategy_groups["conservative_btc_5m"]["enabled"] is False
+    assert config.strategy_groups["conservative_btc_5m"]["capital_fraction"] == 0.5
+    assert config.strategies["fee_aware_pair_arbitrage"]["assets"] == ["BTC"]
+    assert config.strategies["fee_aware_pair_arbitrage"]["timeframes"] == ["5m"]
+
+    with pytest.raises(ValueError, match="strategy_groups"):
+        store.update({"strategy_groups": []})
+
+    with pytest.raises(ValueError, match="group"):
+        store.update({"strategies": {"fee_aware_pair_arbitrage": {"group": "missing"}}})

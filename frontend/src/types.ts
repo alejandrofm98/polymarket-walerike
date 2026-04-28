@@ -22,6 +22,21 @@ export type Config = {
   max_buys_per_side: number;
   paper_mode: boolean;
   enabled_markets: Record<string, string[]>;
+  strategy_groups: Record<string, StrategyGroupConfig>;
+  strategies: Record<string, StrategyConfig>;
+};
+
+export type StrategyGroupConfig = {
+  enabled: boolean;
+  max_orders_per_tick: number;
+  capital_fraction: number;
+};
+
+export type StrategyConfig = {
+  enabled: boolean;
+  group: string;
+  assets: string[];
+  timeframes: string[];
 };
 
 export type Market = {

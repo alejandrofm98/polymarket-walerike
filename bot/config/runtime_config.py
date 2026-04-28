@@ -11,6 +11,14 @@ from typing import Any
 DEFAULT_RUNTIME_CONFIG_PATH = Path("data/runtime_config.json")
 DEFAULT_ASSETS = ("BTC", "ETH", "SOL")
 DEFAULT_TIMEFRAMES = ("5m", "15m", "1h")
+DEFAULT_STRATEGY_GROUPS = {
+    "conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 2, "capital_fraction": 1.0},
+}
+DEFAULT_STRATEGIES = {
+    "fee_aware_pair_arbitrage": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+    "late_window_discount_hedge": {"enabled": False, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+    "high_confidence_near_expiry_side": {"enabled": False, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+}
 
 
 @dataclass(slots=True)
@@ -27,6 +35,8 @@ class RuntimeConfig:
     second_side_time_threshold_ms: float = 200.0
     dynamic_threshold_boost: float = 0.04
     enabled_markets: dict[str, list[str]] | list[str] | None = None
+    strategy_groups: dict[str, dict[str, Any]] | None = None
+    strategies: dict[str, dict[str, Any]] | None = None
     email_loss_alert_pct: float = 0.0
     solo_log: bool = False
     paper_mode: bool = True
@@ -34,6 +44,10 @@ class RuntimeConfig:
     def __post_init__(self) -> None:
         if self.enabled_markets is None:
             self.enabled_markets = {asset: list(DEFAULT_TIMEFRAMES) for asset in DEFAULT_ASSETS}
+        if self.strategy_groups is None:
+            self.strategy_groups = _copy_default_strategy_groups()
+        if self.strategies is None:
+            self.strategies = _copy_default_strategies()
 
 
 class RuntimeConfigStore:
@@ -79,6 +93,8 @@ def validate_runtime_config(config: RuntimeConfig) -> None:
     config.solo_log = bool(config.solo_log)
     config.paper_mode = bool(config.paper_mode)
     config.enabled_markets = normalize_enabled_markets(config.enabled_markets)
+    config.strategy_groups = normalize_strategy_groups(config.strategy_groups)
+    config.strategies = normalize_strategies(config.strategies, config.strategy_groups)
 
 
 def normalize_enabled_markets(value: Any) -> dict[str, list[str]]:
@@ -101,6 +117,63 @@ def normalize_enabled_markets(value: Any) -> dict[str, list[str]]:
 def enabled_market_pairs(value: dict[str, list[str]] | list[str] | None) -> list[tuple[str, str]]:
     normalized = normalize_enabled_markets(value)
     return [(asset, timeframe) for asset, timeframes in normalized.items() for timeframe in timeframes]
+
+
+def normalize_strategy_groups(value: Any) -> dict[str, dict[str, Any]]:
+    if value is None:
+        return _copy_default_strategy_groups()
+    if not isinstance(value, dict):
+        raise ValueError("strategy_groups must be an object")
+    normalized = _copy_default_strategy_groups()
+    for raw_name, raw_group in value.items():
+        name = str(raw_name).strip()
+        if not name or not isinstance(raw_group, dict):
+            raise ValueError("strategy_groups values must be objects")
+        existing = dict(normalized.get(name, {}))
+        existing.update(raw_group)
+        normalized[name] = {
+            "enabled": bool(existing.get("enabled", True)),
+            "max_orders_per_tick": int(_float_range("strategy_groups.max_orders_per_tick", existing.get("max_orders_per_tick", 1), minimum=1.0, maximum=20.0)),
+            "capital_fraction": _float_range("strategy_groups.capital_fraction", existing.get("capital_fraction", 1.0), minimum=0.01, maximum=1.0),
+        }
+    return normalized
+
+
+def normalize_strategies(value: Any, strategy_groups: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+    if value is None:
+        return _copy_default_strategies()
+    if not isinstance(value, dict):
+        raise ValueError("strategies must be an object")
+    groups = strategy_groups or _copy_default_strategy_groups()
+    normalized = _copy_default_strategies()
+    for raw_name, raw_strategy in value.items():
+        name = str(raw_name).strip()
+        if not name or not isinstance(raw_strategy, dict):
+            raise ValueError("strategies values must be objects")
+        existing = dict(normalized.get(name, {}))
+        existing.update(raw_strategy)
+        group = str(existing.get("group", "")).strip()
+        if group not in groups:
+            raise ValueError("strategy group must exist")
+        assets = existing.get("assets", ["BTC"])
+        timeframes = existing.get("timeframes", ["5m"])
+        if not isinstance(assets, list) or not isinstance(timeframes, list):
+            raise ValueError("strategies assets and timeframes must be lists")
+        normalized[name] = {
+            "enabled": bool(existing.get("enabled", False)),
+            "group": group,
+            "assets": [_asset(asset) for asset in assets],
+            "timeframes": [_timeframe(timeframe) for timeframe in timeframes],
+        }
+    return normalized
+
+
+def _copy_default_strategy_groups() -> dict[str, dict[str, Any]]:
+    return {name: dict(group) for name, group in DEFAULT_STRATEGY_GROUPS.items()}
+
+
+def _copy_default_strategies() -> dict[str, dict[str, Any]]:
+    return {name: {**strategy, "assets": list(strategy["assets"]), "timeframes": list(strategy["timeframes"])} for name, strategy in DEFAULT_STRATEGIES.items()}
 
 
 def _asset(value: Any) -> str:
