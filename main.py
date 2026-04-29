@@ -13,9 +13,9 @@ from bot.config.settings import Settings
 from bot.core.binance_feed import BinanceTickerFeed
 from bot.core.polymarket_client import PolymarketClient
 from bot.core.polymarket_rtds_feed import PolymarketRTDSFeed
-from bot.data.market_scanner import MarketScanner
+from bot.data.polymarket_data_client import PolymarketDataClient
 from bot.data.trade_logger import TradeLogger
-from bot.runtime import BotEngine
+from bot.runtime.copy_engine import CopyTradingEngine
 from bot.web.api_routes import BotRuntimeState
 from bot.web.server import create_app
 from bot.web.websocket_server import WebSocketBroadcaster
@@ -58,20 +58,13 @@ def build_services(settings: Settings) -> dict[str, Any]:
     trade_logger = TradeLogger(settings.database_path)
     broadcaster = WebSocketBroadcaster()
     price_feed = create_price_feed(settings)
-    target_price_feed = create_target_price_feed(price_feed)
-    scanner = MarketScanner(client, settings.market_assets, settings.market_timeframes, runtime_config.enabled_markets)
-    engine = BotEngine(
-        settings=settings,
+    data_client = PolymarketDataClient(settings.polymarket_data_api_url)
+    engine = CopyTradingEngine(
         client=client,
-        trade_logger=trade_logger,
+        data_client=data_client,
         broadcaster=broadcaster,
         runtime_config_store=runtime_config_store,
-        scanner=scanner,
-        price_feed=price_feed,
-        oracle=None,
         paper=effective_paper_mode,
-        scan_interval=settings.scan_interval,
-        realtime_interval=settings.realtime_interval,
     )
     return {
         "polymarket_client": client,
@@ -81,9 +74,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
         "runtime_config": runtime_config,
         "broadcaster": broadcaster,
         "price_feed": price_feed,
-        "target_price_feed": target_price_feed,
-        "oracle": None,
-        "market_scanner": scanner,
+        "data_client": data_client,
         "bot_engine": engine,
     }
 

@@ -18,15 +18,10 @@ import type {
 } from "@/types";
 
 const emptyConfig: Config = {
-  capital_per_trade: 0,
-  min_margin_for_arbitrage: 0,
-  entry_threshold: 0,
-  max_sum_avg: 0,
-  max_buys_per_side: 1,
+  copy_wallets: [],
+  poll_interval_seconds: 5,
   paper_mode: true,
-  enabled_markets: {},
-  strategy_groups: {},
-  strategies: {},
+  solo_log: false,
 };
 
 const MARKET_TICK_THROTTLE_MS = 1000;
@@ -157,17 +152,6 @@ function App() {
     } catch (error) {
       log((error as Error).message);
     }
-  }
-
-  function updateEnabledMarket(asset: string, timeframe: string, checked: boolean) {
-    setConfig((current) => {
-      const enabled = { ...current.enabled_markets };
-      const values = new Set(enabled[asset] || []);
-      if (checked) values.add(timeframe);
-      else values.delete(timeframe);
-      enabled[asset] = Array.from(values);
-      return { ...current, enabled_markets: enabled };
-    });
   }
 
   useEffect(() => {
@@ -323,7 +307,6 @@ function App() {
               runtime={runtime}
               setConfig={setConfig}
               onSubmit={saveSettings}
-              onEnabledMarketChange={updateEnabledMarket}
             />
           )}
         </section>

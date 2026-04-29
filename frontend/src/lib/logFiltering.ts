@@ -13,14 +13,10 @@ const IMPORTANT_LOG_MARKERS = [
   "FAILED",
   "error",
   "ERROR",
+  "COPY",
+  "copy",
 ];
 
-export function shouldShowRealtimeLog(message: string, config?: Pick<Config, "strategy_groups" | "strategies">): boolean {
-  const strategy = message.match(/\bstrategy=([^\s]+)/)?.[1];
-  if (strategy && config) {
-    const strategyConfig = config.strategies?.[strategy];
-    const groupConfig = strategyConfig ? config.strategy_groups?.[strategyConfig.group] : undefined;
-    if (!strategyConfig?.enabled || !groupConfig?.enabled) return false;
-  }
+export function shouldShowRealtimeLog(message: string, _config?: Partial<Config>): boolean {
   return IMPORTANT_LOG_MARKERS.some((marker) => message.includes(marker));
 }

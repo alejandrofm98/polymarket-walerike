@@ -15,15 +15,17 @@ export type Runtime = {
 };
 
 export type Config = {
-  capital_per_trade: number;
-  min_margin_for_arbitrage: number;
-  entry_threshold: number;
-  max_sum_avg: number;
-  max_buys_per_side: number;
+  copy_wallets: CopyWalletConfig[];
+  poll_interval_seconds: number;
   paper_mode: boolean;
-  enabled_markets: Record<string, string[]>;
-  strategy_groups: Record<string, StrategyGroupConfig>;
-  strategies: Record<string, StrategyConfig>;
+  solo_log?: boolean;
+};
+
+export type CopyWalletConfig = {
+  address: string;
+  enabled: boolean;
+  sizing_mode: "leader_percent" | "fixed";
+  fixed_amount: number;
 };
 
 export type StrategyGroupConfig = {
