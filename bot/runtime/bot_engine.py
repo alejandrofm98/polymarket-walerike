@@ -16,7 +16,7 @@ from typing import Any
 from bot.config.runtime_config import RuntimeConfigStore, validate_runtime_config
 from bot.config.settings import Settings
 from bot.core.hedge_strategy import HedgeStrategy, MarketSnapshot
-from bot.core.polymarket_client import OrderRequest, OrderSide, OrderType, PolymarketClient
+from bot.core.polymarket_client import POLYMARKET_MIN_ORDER_SIZE, OrderRequest, OrderSide, OrderType, PolymarketClient
 from bot.core.risk_manager import AccountRiskState, RiskManager
 from bot.core.strategy_registry import StrategyRegistry
 from bot.data.market_scanner import MarketCandidate, MarketScanner
@@ -92,6 +92,7 @@ class BotEngine:
         self._last_scan_at: float = 0.0
         self.SCAN_CACHE_DURATION: float = 10.0
         self._first_window_seen: dict[str, int] = {}
+        self._open_maker_orders: dict[str, str] = {}
         self.logger = logging.getLogger("walerike.bot_engine")
         self._apply_runtime_config()
 
@@ -249,6 +250,10 @@ class BotEngine:
                 summary["skipped"] += 1
                 self.skipped += 1
                 continue
+            if snapshot.price_to_beat is None:
+                await self._target_price_for_snapshot(snapshot)
+                market.price_to_beat = snapshot.price_to_beat
+                market.window_start_timestamp = snapshot.window_start_timestamp
             summary["evaluated"] += 1
             result = await self._evaluate_and_order(snapshot)
             summary["orders"] += result
@@ -380,11 +385,6 @@ class BotEngine:
         if not signals and not has_registry_scope:
             signals = [self.strategy.evaluate(snapshot, self.capital_per_trade, momentum)]
 
-        await self._log_event(
-            f"[BET_EVAL] mode={mode} trade_key={trade_key} strategies={len(signals)} "
-            f"yes={snapshot.yes_price:.3f} no={snapshot.no_price:.3f} momentum={momentum:.4f}"
-        )
-
         if not signals and has_registry_scope and self.strategy_registry is not None:
             for diagnostic in self.strategy_registry.skip_diagnostics(snapshot):
                 await self._log_event(
@@ -394,11 +394,26 @@ class BotEngine:
 
         placed = 0
         max_orders = self.strategy_registry.max_orders_per_tick() if self.strategy_registry is not None else 2
+        active_maker_keys = {self._maker_order_key(snapshot, signal) for signal in signals if getattr(signal, "post_only", False)}
+        await self._cancel_stale_maker_orders(snapshot, active_maker_keys)
         for signal in signals:
             if placed >= max_orders:
                 break
             placed += await self._execute_signal(snapshot, signal, mode, trade_key, max_orders - placed)
         return placed
+
+    def _maker_order_key(self, snapshot: MarketSnapshot, signal: Any) -> str:
+        strategy_name = getattr(signal, "strategy_name", None) or "default"
+        target_side = getattr(signal, "target_side", None) or "NONE"
+        return f"{snapshot.market_id}:{strategy_name}:{target_side}"
+
+    async def _cancel_stale_maker_orders(self, snapshot: MarketSnapshot, active_keys: set[str]) -> None:
+        prefix = f"{snapshot.market_id}:"
+        for key, order_id in list(self._open_maker_orders.items()):
+            if key.startswith(prefix) and key not in active_keys:
+                if hasattr(self.client, "cancel_order"):
+                    await self.client.cancel_order(order_id)
+                self._open_maker_orders.pop(key, None)
 
     async def _execute_signal(self, snapshot: MarketSnapshot, signal: Any, mode: str, trade_key: str, remaining_orders: int) -> int:
         if signal.yes_size > 0 and signal.no_size > 0 and remaining_orders < 2:
@@ -413,7 +428,7 @@ class BotEngine:
             requested_size=min(signal.yes_size + signal.no_size, self.capital_per_trade),
             state=self.account,
             oracle_discrepancy_pct=self._oracle_discrepancy(snapshot),
-            trade_key=trade_key,
+            trade_key=None if getattr(signal, "post_only", False) else trade_key,
             signal_mode=signal.mode,
         )
 
@@ -434,19 +449,30 @@ class BotEngine:
             signal.yes_size *= scale
             signal.no_size *= scale
 
+        strategy_name = getattr(signal, "strategy_name", None) or "default"
+        positive_sizes = [size for size in (signal.yes_size, signal.no_size) if size > 0]
+        smallest_leg_size = min(positive_sizes) if positive_sizes else 0.0
+        if 0 < smallest_leg_size < POLYMARKET_MIN_ORDER_SIZE:
+            await self._log_event(
+                f"[BET_SKIP] mode={mode} trade_key={trade_key} strategy={strategy_name} "
+                f"reason=size_too_small requirement=order_size>={POLYMARKET_MIN_ORDER_SIZE:.3f} "
+                f"actual={smallest_leg_size:.3f}"
+            )
+            return 0
+
         approved_side = "BOTH" if signal.yes_size > 0 and signal.no_size > 0 else "YES" if signal.yes_size > 0 else "NO" if signal.no_size > 0 else "NONE"
         approved_size = signal.yes_size + signal.no_size
-        approved_price = snapshot.yes_price if signal.yes_size > 0 else snapshot.no_price
+        approved_price = float(getattr(signal, "limit_price", None) or (snapshot.yes_price if signal.yes_size > 0 else snapshot.no_price))
         approved_token = f"{snapshot.yes_token_id},{snapshot.no_token_id}" if approved_side == "BOTH" else snapshot.yes_token_id if signal.yes_size > 0 else snapshot.no_token_id
         await self._log_event(
-            f"[BET_DECISION] action=APPROVED mode={mode} trade_key={trade_key} side={approved_side} "
+            f"[BET_DECISION] action=APPROVED mode={mode} trade_key={trade_key} strategy={strategy_name} side={approved_side} "
             f"price={approved_price:.3f} size={approved_size:.2f} token_id={approved_token} reasons={signal.reasons} risk={decision.reasons}"
         )
-        await self._log_event(f"[TRADE] APPROVED: placing {signal.yes_size:.2f} YES @ {snapshot.yes_price:.3f} and {signal.no_size:.2f} NO @ {snapshot.no_price:.3f} for {trade_key}")
+        await self._log_event(f"[TRADE] APPROVED strategy={strategy_name}: placing {signal.yes_size:.2f} YES @ {snapshot.yes_price:.3f} and {signal.no_size:.2f} NO @ {snapshot.no_price:.3f} for {trade_key}")
         placed = 0
         yes_placed = 0
         if signal.yes_size > 0 and remaining_orders > placed:
-            result = await self._place_leg(snapshot, snapshot.yes_token_id, OrderSide.BUY, snapshot.yes_price, signal.yes_size, "YES")
+            result = await self._place_leg(snapshot, snapshot.yes_token_id, OrderSide.BUY, approved_price if approved_side == "YES" else snapshot.yes_price, signal.yes_size, "YES", signal=signal)
             placed += result
             yes_placed = result
             if result and hasattr(self.strategy, "record_buy"):
@@ -455,22 +481,22 @@ class BotEngine:
             await self._log_event(f"[BET_DECISION] action=PAIR_ABORTED trade_key={trade_key} reason=yes_leg_not_placed")
             return placed
         if signal.no_size > 0 and remaining_orders > placed:
-            result = await self._place_leg(snapshot, snapshot.no_token_id, OrderSide.BUY, snapshot.no_price, signal.no_size, "NO")
+            result = await self._place_leg(snapshot, snapshot.no_token_id, OrderSide.BUY, approved_price if approved_side == "NO" else snapshot.no_price, signal.no_size, "NO", signal=signal)
             placed += result
             if result and hasattr(self.strategy, "record_buy"):
                 self.strategy.record_buy(snapshot, "NO", snapshot.no_price, signal.no_size)
-        if placed:
+        if placed and not getattr(signal, "post_only", False):
             self.account.open_trade_keys.add(trade_key)
             self.account.last_trade_ts_by_asset[snapshot.asset] = time.time()
             await self._log_event(f"placed {placed} orders for {trade_key}")
         return placed
 
-    async def _place_leg(self, snapshot: MarketSnapshot, token_id: str, side: OrderSide, price: float, size: float, label: str) -> int:
+    async def _place_leg(self, snapshot: MarketSnapshot, token_id: str, side: OrderSide, price: float, size: float, label: str, signal: Any | None = None) -> int:
         if not token_id:
             await self._log_event(f"[SKIP] {label} leg: missing token_id")
             return 0
-        if size < 0.01:
-            await self._log_event(f"[SKIP] {label} leg: size {size:.2f} below minimum 0.01")
+        if size < POLYMARKET_MIN_ORDER_SIZE:
+            await self._log_event(f"[SKIP] {label} leg: size {size:.2f} below minimum {POLYMARKET_MIN_ORDER_SIZE:.2f}")
             return 0
         if self.paper and side is OrderSide.BUY:
             available = snapshot.yes_liquidity if label == "YES" else snapshot.no_liquidity
@@ -479,7 +505,11 @@ class BotEngine:
                 return 0
         expiration = int(time.time()) + 120
         order_price = max(0.01, min(0.99, price))
-        client_order_id = f"walerike-{uuid.uuid4().hex}"
+        maker_key = self._maker_order_key(snapshot, signal) if signal is not None and getattr(signal, "post_only", False) else None
+        if maker_key and maker_key in self._open_maker_orders and hasattr(self.client, "cancel_order"):
+            await self.client.cancel_order(self._open_maker_orders[maker_key])
+            self._open_maker_orders.pop(maker_key, None)
+        client_order_id = f"maker:{snapshot.market_id}:{getattr(signal, 'strategy_name', 'default')}:{label}" if maker_key else f"walerike-{uuid.uuid4().hex}"
         mode = "PAPER" if self.paper else "LIVE"
         self.order_attempts += 1
         self.last_order_attempt_at = time.time()
@@ -487,6 +517,7 @@ class BotEngine:
             "market": snapshot.market_id,
             "asset": snapshot.asset,
             "timeframe": snapshot.timeframe,
+            "strategy": getattr(signal, "strategy_name", None) or "default" if signal is not None else "default",
             "side": label,
             "order_side": side.value,
             "price": order_price,
@@ -498,7 +529,7 @@ class BotEngine:
         }
         await self._log_event(
             f"[ORDER_ATTEMPT] attempt={self.order_attempts} mode={mode} market={snapshot.market_id} "
-            f"asset={snapshot.asset}/{snapshot.timeframe} side={label} order_side={side.value} "
+            f"asset={snapshot.asset}/{snapshot.timeframe} strategy={attempt_payload['strategy']} side={label} order_side={side.value} "
             f"price={order_price:.3f} size={size:.2f} token_id={token_id} client_order_id={client_order_id}"
         )
         await self._publish("order_attempt", attempt_payload)
@@ -513,6 +544,7 @@ class BotEngine:
                     order_type=OrderType.GTD,
                     expiration=expiration,
                     client_order_id=client_order_id,
+                    post_only=bool(getattr(signal, "post_only", False)),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - live order rejects must not stop the bot loop
@@ -536,6 +568,10 @@ class BotEngine:
         await self._log_event(f"[ORDER_ACCEPTED] attempt={self.order_attempts} mode={mode} order_id={order.order_id} status={order.status} market={snapshot.market_id} side={label} price={order_price:.3f} size={size:.2f}")
         await self._publish("order_accepted", {**attempt_payload, "order_id": order.order_id, "status": order.status, "raw": order.raw})
         self.orders_placed += 1
+        if maker_key:
+            self._open_maker_orders[maker_key] = order.order_id
+            await self._publish("order_placed", {"order_id": order.order_id, "market": snapshot.market_id, "asset": snapshot.asset, "side": label, "price": price, "size": size})
+            return 1
         self.account.total_exposure += price * size
         self.account.positions_by_market[snapshot.market_id] = self.account.positions_by_market.get(snapshot.market_id, 0.0) + size
         if self.trade_logger is not None and hasattr(self.trade_logger, "log_trade_opened"):
@@ -658,15 +694,15 @@ class BotEngine:
         ), debug
 
     @staticmethod
-    def _buy_liquidity_at_price(levels: list[dict[str, float]], limit_price: float, *, fallback: float, book_price: float | None) -> float:
+    def _buy_liquidity_at_price(levels: list[dict[str, float]], limit_price: float, *, fallback: float | None, book_price: float | None) -> float:
         if levels:
             return sum(level["size"] for level in levels if level["price"] <= limit_price)
-        if book_price is not None:
+        if book_price is not None and fallback is None:
             return 0.0
-        return fallback
+        return fallback or 0.0
 
     @staticmethod
-    def _liquidity_fallback(token: dict[str, Any] | None, market: MarketCandidate) -> float:
+    def _liquidity_fallback(token: dict[str, Any] | None, market: MarketCandidate) -> float | None:
         for value in (
             (token or {}).get("liquidity"),
             (token or {}).get("size"),
@@ -676,7 +712,7 @@ class BotEngine:
             if value is not None:
                 with contextlib.suppress(TypeError, ValueError):
                     return float(value)
-        return 100.0
+        return None
 
     async def _settle_paper_trades(self, markets: list[MarketCandidate]) -> None:
         if not self.paper or self.trade_logger is None or not hasattr(self.trade_logger, "list_trades"):

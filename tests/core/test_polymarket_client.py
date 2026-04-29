@@ -18,7 +18,7 @@ def _request(**overrides: object) -> OrderRequest:
         "asset_id": "token-1",
         "side": OrderSide.BUY,
         "price": 0.5,
-        "size": 1.0,
+        "size": 5.0,
         "order_type": OrderType.GTD,
         "expiration": int(time.time()) + 120,
     }
@@ -31,7 +31,7 @@ def _request(**overrides: object) -> OrderRequest:
     [
         ({"price": 0.0}, "price"),
         ({"price": 1.0}, "price"),
-        ({"size": 0.99}, "size"),
+        ({"size": 4.99}, "size"),
         ({"expiration": None}, "GTD"),
         ({"expiration": int(time.time()) - 1}, "future"),
     ],
@@ -58,6 +58,17 @@ def test_paper_order_and_cancel_never_touch_live_sdk() -> None:
         assert order.raw["paper"] is True
         assert await client.cancel_order(order.order_id) is True
         assert await client.cancel_order(order.order_id) is False
+
+    asyncio.run(run())
+
+
+def test_paper_order_records_post_only_flag() -> None:
+    async def run() -> None:
+        client = PolymarketClient(paper_mode=True)
+
+        order = await client.place_order(_request(post_only=True))
+
+        assert order.raw["post_only"] is True
 
     asyncio.run(run())
 
@@ -152,6 +163,75 @@ def test_env_api_creds_construct_clob_creds() -> None:
     assert creds.api_key == "key"
     assert creds.api_secret == "secret"
     assert creds.api_passphrase == "pass"
+
+
+def test_build_clob_client_prefers_v2_sdk(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    imported = []
+
+    class FakeClobClient:
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.kwargs = kwargs
+
+        def set_api_creds(self, creds):  # type: ignore[no-untyped-def]
+            self.creds = creds
+
+        def create_or_derive_api_key(self):  # type: ignore[no-untyped-def]
+            return "derived-v2"
+
+    class FakeClientModule:
+        ClobClient = FakeClobClient
+
+    class FakeTypesModule:
+        @dataclass
+        class ApiCreds:
+            api_key: str
+            api_secret: str
+            api_passphrase: str
+
+        @dataclass
+        class OrderArgsV2:
+            token_id: str
+            price: float
+            size: float
+            side: str
+            expiration: int | None = None
+
+        class OrderType:
+            GTD = "GTD"
+
+        class OpenOrderParams:
+            pass
+
+        class TradeParams:
+            pass
+
+        class BalanceAllowanceParams:
+            pass
+
+    class FakeConstantsModule:
+        BUY = "BUY"
+        SELL = "SELL"
+
+    def fake_import_module(name: str) -> object:
+        imported.append(name)
+        modules = {
+            "py_clob_client_v2.client": FakeClientModule,
+            "py_clob_client_v2.clob_types": FakeTypesModule,
+            "py_clob_client_v2.order_builder.constants": FakeConstantsModule,
+        }
+        if name in modules:
+            return modules[name]
+        raise AssertionError(name)
+
+    monkeypatch.setattr(polymarket_client_module.importlib, "import_module", fake_import_module)
+    settings = Settings(paper_mode=False, live_trading=True, private_key="key", chain_id=137)
+    client = PolymarketClient(settings=settings, paper_mode=False)
+
+    built = client._build_clob_client()
+
+    assert "py_clob_client_v2.client" in imported
+    assert built.kwargs["host"] == settings.polymarket_host
+    assert client._sdk["OrderArgs"] is FakeTypesModule.OrderArgsV2
 
 
 def test_live_signing_warnings_detect_api_key_address_mismatch(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -438,5 +518,137 @@ def test_live_account_trades_normalizes_sdk_payload() -> None:
         assert await client.get_account_trades() == [
             {"id": "t1", "market": "m1", "side": "BUY", "size": 10.0, "price": 0.42, "fee": 0.01, "timestamp": 1777320000.0, "raw": {"id": "t1", "market": "m1", "side": "BUY", "size": "10", "price": "0.42", "fee": "0.01", "timestamp": "1777320000"}},
         ]
+
+    asyncio.run(run())
+
+
+def test_live_order_passes_post_only_to_sdk_post_order() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        calls = []
+
+        @dataclass
+        class FakeOrderArgs:
+            token_id: str
+            price: float
+            size: float
+            side: str
+            expiration: int | None = None
+
+        class FakeOrderType:
+            GTD = "GTD"
+
+        class FakeClob:
+            def create_order(self, args):  # type: ignore[no-untyped-def]
+                calls.append(("create_order", args))
+                return {"signed": True}
+
+            def post_order(self, signed, order_type, *, post_only=False):  # type: ignore[no-untyped-def]
+                calls.append(("post_order", signed, order_type, post_only))
+                return {"success": True, "orderID": "live-1", "status": "live"}
+
+        client._sdk = {"OrderArgs": FakeOrderArgs, "OrderType": FakeOrderType, "BUY": "BUY", "SELL": "SELL"}
+        client._clob_client = FakeClob()
+
+        order = await client.place_order(_request(post_only=True))
+
+        assert order.order_id == "live-1"
+        assert calls[-1] == ("post_order", {"signed": True}, "GTD", True)
+
+    asyncio.run(run())
+
+
+def test_live_post_only_order_reports_old_sdk_clearly() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+
+        @dataclass
+        class FakeOrderArgs:
+            token_id: str
+            price: float
+            size: float
+            side: str
+            expiration: int | None = None
+
+        class FakeOrderType:
+            GTD = "GTD"
+
+        class FakeClob:
+            def create_order(self, args):  # type: ignore[no-untyped-def]
+                return {"signed": True}
+
+            def post_order(self, signed, order_type):  # type: ignore[no-untyped-def]
+                return {"success": True, "orderID": "live-1", "status": "live"}
+
+        client._sdk = {"OrderArgs": FakeOrderArgs, "OrderType": FakeOrderType, "BUY": "BUY", "SELL": "SELL"}
+        client._clob_client = FakeClob()
+
+        with pytest.raises(RuntimeError, match="post_only"):
+            await client.place_order(_request(post_only=True))
+
+    asyncio.run(run())
+
+
+def test_v2_live_order_uses_create_and_post_order_for_version_retry() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        calls = []
+
+        @dataclass
+        class FakeOrderArgs:
+            token_id: str
+            price: float
+            size: float
+            side: str
+            expiration: int | None = None
+
+        class FakeOrderType:
+            GTD = "GTD"
+
+        class FakeClob:
+            def create_and_post_order(self, args, options=None, order_type="GTC", post_only=False):  # type: ignore[no-untyped-def]
+                calls.append(("create_and_post_order", args, options, order_type, post_only))
+                return {"success": True, "orderID": "live-v2", "status": "live"}
+
+            def create_order(self, args):  # pragma: no cover
+                raise AssertionError("v2 orders should use SDK retry helper")
+
+        client._sdk = {"name": "py-clob-client-v2", "OrderArgs": FakeOrderArgs, "OrderType": FakeOrderType, "BUY": "BUY", "SELL": "SELL"}
+        client._clob_client = FakeClob()
+
+        order = await client.place_order(_request(post_only=True))
+
+        assert order.order_id == "live-v2"
+        assert calls[0][0] == "create_and_post_order"
+        assert calls[0][3] == "GTD"
+        assert calls[0][4] is True
+
+    asyncio.run(run())
+
+
+def test_v2_get_and_cancel_orders_use_v2_method_names() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        calls = []
+
+        @dataclass
+        class FakeOrderPayload:
+            orderID: str
+
+        class FakeClob:
+            def get_open_orders(self):  # type: ignore[no-untyped-def]
+                calls.append(("get_open_orders",))
+                return [{"id": "order-1"}]
+
+            def cancel_order(self, payload):  # type: ignore[no-untyped-def]
+                calls.append(("cancel_order", payload.orderID))
+                return True
+
+        client._sdk = {"name": "py-clob-client-v2", "OrderPayload": FakeOrderPayload}
+        client._clob_client = FakeClob()
+
+        assert await client.get_orders() == [{"id": "order-1"}]
+        assert await client.cancel_order("order-1") is True
+        assert calls == [("get_open_orders",), ("cancel_order", "order-1")]
 
     asyncio.run(run())

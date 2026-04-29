@@ -25,6 +25,11 @@ const strategyLabels: Record<string, { title: string; description: string; risk:
     description: "Directional UP/DOWN entry only when spot is far from target near close.",
     risk: "Strict directional",
   },
+  conservative_oracle_edge: {
+    title: "Conservative oracle edge",
+    description: "Directional maker/taker entry when spot is far enough from the target.",
+    risk: "Conservative directional",
+  },
 };
 
 interface SettingsViewProps {

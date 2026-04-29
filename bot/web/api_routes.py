@@ -15,6 +15,13 @@ from bot.config.runtime_config import RuntimeConfigStore, validate_runtime_confi
 
 logger = logging.getLogger("walerike.api")
 
+
+def _live_sdk_available() -> bool:
+    try:
+        return importlib.util.find_spec("py_clob_client_v2.client") is not None or importlib.util.find_spec("py_clob_client.client") is not None
+    except ModuleNotFoundError:
+        return False
+
 try:
     from fastapi import APIRouter, HTTPException, Response
 except ImportError:  # pragma: no cover - optional until web server use
@@ -89,15 +96,12 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
             requested_paper_mode = bool(runtime_payload.get("paper_mode", settings.paper_mode))
         paper_mode = bool(runtime_payload.get("paper_mode", settings.paper_mode))
         live_trading = bool(getattr(settings, "live_trading", False))
-        try:
-            live_sdk_available = importlib.util.find_spec("py_clob_client.client") is not None
-        except ModuleNotFoundError:
-            live_sdk_available = False
+        live_sdk_available = _live_sdk_available()
         live_block_reason = None
         if requested_paper_mode is False and not live_trading:
             live_block_reason = "POLYMARKET_LIVE_TRADING=true required for live mode"
         elif requested_paper_mode is False and not live_sdk_available:
-            live_block_reason = "Live mode requires optional package py-clob-client"
+            live_block_reason = "Live mode requires optional package py-clob-client-v2"
         live_blocked = live_block_reason is not None
         can_live_trade = not paper_mode and live_trading
         return {

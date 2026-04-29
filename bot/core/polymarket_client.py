@@ -36,6 +36,8 @@ POLYMARKET_WEB_URL = "https://polymarket.com"
 
 from bot.config.settings import Settings
 
+POLYMARKET_MIN_ORDER_SIZE = 5.0
+
 try:
     import websockets
 except ImportError:  # pragma: no cover - optional until websocket use
@@ -63,6 +65,7 @@ class OrderRequest:
     order_type: OrderType = OrderType.GTD
     expiration: int | None = None
     client_order_id: str | None = None
+    post_only: bool = False
 
 
 @dataclass(slots=True)
@@ -172,6 +175,8 @@ class PolymarketClient:
         if self.paper_mode:
             return list(self._paper_orders.values())
         client = self._require_clob_client()
+        if hasattr(client, "get_open_orders"):
+            return await self._call_sync(client.get_open_orders)
         return await self._call_sync(client.get_orders)
 
     async def get_trades(self) -> Any:
@@ -259,7 +264,7 @@ class PolymarketClient:
                 side=request.side,
                 price=request.price,
                 size=request.size,
-                raw={"paper": True, "client_order_id": request.client_order_id},
+                raw={"paper": True, "client_order_id": request.client_order_id, "post_only": request.post_only},
             )
             self._paper_orders[order_id] = response
             logger.info("Paper order placed: {}", order_id)
@@ -276,8 +281,20 @@ class PolymarketClient:
         }
         if request.expiration is not None:
             args["expiration"] = request.expiration
-        signed = await self._call_sync(client.create_order, sdk["OrderArgs"](**args))
-        raw = await self._call_sync(client.post_order, signed, self._sdk_order_type(request.order_type))
+        sdk_order_type = self._sdk_order_type(request.order_type)
+        order_args = sdk["OrderArgs"](**args)
+        if sdk.get("name") == "py-clob-client-v2" and hasattr(client, "create_and_post_order"):
+            raw = await self._call_sync(client.create_and_post_order, order_args, None, sdk_order_type, request.post_only)
+            return self._order_response_from_raw(request, raw)
+
+        signed = await self._call_sync(client.create_order, order_args)
+        if request.post_only:
+            try:
+                raw = await self._call_sync(client.post_order, signed, sdk_order_type, post_only=True)
+            except TypeError as exc:
+                raise RuntimeError("installed py-clob-client does not support post_only orders; install a version with post_order(..., post_only=...) support") from exc
+        else:
+            raw = await self._call_sync(client.post_order, signed, sdk_order_type)
         return self._order_response_from_raw(request, raw)
 
     async def cancel_order(self, order_id: str) -> bool:
@@ -288,6 +305,11 @@ class PolymarketClient:
             logger.info("Paper order canceled: {}", order_id)
             return True
         client = self._require_clob_client()
+        if hasattr(client, "cancel_order"):
+            payload_type = self._require_sdk().get("OrderPayload")
+            payload = payload_type(orderID=order_id) if payload_type is not None else {"orderID": order_id}
+            await self._call_sync(client.cancel_order, payload)
+            return True
         await self._call_sync(client.cancel, order_id)
         return True
 
@@ -319,18 +341,29 @@ class PolymarketClient:
 
     def _build_clob_client(self) -> Any:
         try:
-            client_module = importlib.import_module("py_clob_client.client")
-            types_module = importlib.import_module("py_clob_client.clob_types")
-            constants_module = importlib.import_module("py_clob_client.order_builder.constants")
+            client_module = importlib.import_module("py_clob_client_v2.client")
+            types_module = importlib.import_module("py_clob_client_v2.clob_types")
+            constants_module = importlib.import_module("py_clob_client_v2.order_builder.constants")
+            order_args = getattr(types_module, "OrderArgsV2")
+            sdk_name = "py-clob-client-v2"
         except ImportError as exc:
-            raise RuntimeError("Live mode requires optional package py-clob-client") from exc
+            try:
+                client_module = importlib.import_module("py_clob_client.client")
+                types_module = importlib.import_module("py_clob_client.clob_types")
+                constants_module = importlib.import_module("py_clob_client.order_builder.constants")
+                order_args = types_module.OrderArgs
+                sdk_name = "py-clob-client"
+            except ImportError as legacy_exc:
+                raise RuntimeError("Live mode requires optional package py-clob-client-v2") from legacy_exc
         self._sdk = {
+            "name": sdk_name,
             "ApiCreds": types_module.ApiCreds,
             "BalanceAllowanceParams": getattr(types_module, "BalanceAllowanceParams", None),
-            "OrderArgs": types_module.OrderArgs,
+            "OrderArgs": order_args,
+            "OrderPayload": getattr(types_module, "OrderPayload", None),
             "OrderType": types_module.OrderType,
-            "OpenOrderParams": types_module.OpenOrderParams,
-            "TradeParams": types_module.TradeParams,
+            "OpenOrderParams": getattr(types_module, "OpenOrderParams", None),
+            "TradeParams": getattr(types_module, "TradeParams", None),
             "BUY": constants_module.BUY,
             "SELL": constants_module.SELL,
         }
@@ -347,8 +380,11 @@ class PolymarketClient:
         if env_creds is not None:
             kwargs["creds"] = env_creds
         client = client_module.ClobClient(**kwargs)
-        if env_creds is None and self.settings.live_trading and self.settings.private_key and hasattr(client, "create_or_derive_api_creds"):
-            client.set_api_creds(client.create_or_derive_api_creds())
+        if env_creds is None and self.settings.live_trading and self.settings.private_key:
+            if hasattr(client, "create_or_derive_api_key"):
+                client.set_api_creds(client.create_or_derive_api_key())
+            elif hasattr(client, "create_or_derive_api_creds"):
+                client.set_api_creds(client.create_or_derive_api_creds())
         return client
 
     def _env_api_creds(self, types_module: Any) -> Any | None:
@@ -434,8 +470,8 @@ class PolymarketClient:
     def _validate_order(self, request: OrderRequest) -> None:
         if not 0.01 <= request.price <= 0.99:
             raise ValueError("price must be between 0.01 and 0.99")
-        if request.size < 0.01:
-            raise ValueError("size must be >= 0.01")
+        if request.size < POLYMARKET_MIN_ORDER_SIZE:
+            raise ValueError(f"size must be >= {POLYMARKET_MIN_ORDER_SIZE:.1f}")
         if request.order_type is OrderType.GTD and request.expiration is None:
             raise ValueError("GTD orders require expiration")
         if request.order_type is OrderType.GTD and request.expiration <= int(time.time()):
@@ -453,7 +489,7 @@ class PolymarketClient:
     @staticmethod
     def live_sdk_available() -> bool:
         try:
-            return importlib.util.find_spec("py_clob_client.client") is not None
+            return importlib.util.find_spec("py_clob_client_v2.client") is not None or importlib.util.find_spec("py_clob_client.client") is not None
         except ModuleNotFoundError:
             return False
 

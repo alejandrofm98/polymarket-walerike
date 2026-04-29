@@ -159,6 +159,83 @@ class BtcFiveMinuteNoSignalScanner:
         ]
 
 
+class BtcFiveMinuteExplicitLiquidityScanner:
+    async def scan(self) -> list[MarketCandidate]:
+        return [
+            MarketCandidate(
+                market_id="btc-5m-explicit-liquidity",
+                question="Bitcoin up or down in 5m?",
+                asset="BTC",
+                timeframe="5m",
+                market_slug="btc-updown-5m-explicit-liquidity-test",
+                up_token_id="yes-token",
+                down_token_id="no-token",
+                best_ask_up=0.60,
+                best_ask_down=0.44,
+                tokens=[
+                    {"outcome": "Up", "token_id": "yes-token", "liquidity": 100.0},
+                    {"outcome": "Down", "token_id": "no-token", "liquidity": 100.0},
+                ],
+                end_date=(datetime.now(timezone.utc) + timedelta(seconds=45)).isoformat(),
+                price_to_beat=100.0,
+            )
+        ]
+
+
+class BtcFiveMinuteMakerEdgeScanner:
+    async def scan(self) -> list[MarketCandidate]:
+        return [
+            MarketCandidate(
+                market_id="btc-5m-maker-edge",
+                question="Bitcoin up or down in 5m?",
+                asset="BTC",
+                timeframe="5m",
+                market_slug="btc-updown-5m-maker-edge-test",
+                up_token_id="yes-token",
+                down_token_id="no-token",
+                best_ask_up=0.60,
+                best_ask_down=0.44,
+                asks_up=[{"price": 0.60, "size": 100.0}],
+                asks_down=[{"price": 0.44, "size": 100.0}],
+                end_date=(datetime.now(timezone.utc) + timedelta(seconds=45)).isoformat(),
+                price_to_beat=100.0,
+            )
+        ]
+
+
+class BtcFiveMinuteMissingTargetScanner:
+    async def scan(self) -> list[MarketCandidate]:
+        return [
+            MarketCandidate(
+                market_id="btc-5m-missing-target",
+                question="Bitcoin up or down in 5m?",
+                asset="BTC",
+                timeframe="5m",
+                market_slug="btc-updown-5m-1777225800",
+                up_token_id="yes-token",
+                down_token_id="no-token",
+                best_ask_up=0.60,
+                best_ask_down=0.44,
+                asks_up=[{"price": 0.60, "size": 100.0}],
+                asks_down=[{"price": 0.44, "size": 100.0}],
+                end_date=(datetime.now(timezone.utc) + timedelta(seconds=45)).isoformat(),
+                window_start_timestamp=1777225800,
+            )
+        ]
+
+
+class MakerEdgePriceFeed:
+    def __init__(self) -> None:
+        self.latest = {"BTC": Tick(asset="BTC", price=100.30)}
+        self.closed = False
+
+    def momentum_pct(self, asset: str) -> float:
+        return 0.0
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class EmptyScanner:
     async def scan(self) -> list[MarketCandidate]:
         return []
@@ -188,6 +265,7 @@ class FakeClient:
         self.connected = False
         self.closed = False
         self.orders = []
+        self.cancelled = []
 
     async def connect(self) -> None:
         self.connected = True
@@ -207,6 +285,10 @@ class FakeClient:
             size=request.size,
             raw={"paper": True},
         )
+
+    async def cancel_order(self, order_id: str) -> bool:
+        self.cancelled.append(order_id)
+        return True
 
 
 class FailingOrderClient(FakeClient):
@@ -370,7 +452,6 @@ def test_bot_engine_uses_price_feed_as_oracle_fallback_and_publishes_decision_lo
         assert first_summary == {"scanned": 1, "evaluated": 1, "orders": 0, "skipped": 0}
         assert summary == {"scanned": 1, "evaluated": 1, "orders": 2, "skipped": 0}
         assert len(client.orders) == 2
-        assert any("[BET_EVAL]" in message for message in log_messages)
         assert any("[BET_DECISION] action=APPROVED" in message for message in log_messages)
         assert any("[ORDER_ATTEMPT]" in message for message in log_messages)
         assert any(event[0] == "order_attempt" for event in broadcaster.events)
@@ -477,6 +558,41 @@ def test_bot_engine_does_not_fallback_when_matching_strategy_group_disabled(tmp_
     asyncio.run(run())
 
 
+def test_bot_engine_does_not_execute_or_log_disabled_strategy(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update(
+            {
+                "strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 2, "capital_fraction": 1.0}},
+                "strategies": {
+                    "fee_aware_pair_arbitrage": {"enabled": False, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                    "conservative_oracle_edge": {"enabled": False, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                },
+            }
+        )
+        broadcaster = FakeBroadcaster()
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            broadcaster=broadcaster,
+            scanner=BtcFiveMinuteDiscountScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        summary = await engine.run_once()
+        log_messages = [event[1]["message"] for event in broadcaster.events if event[0] == "log"]
+
+        assert summary["orders"] == 0
+        assert client.orders == []
+        assert not any("strategy=fee_aware_pair_arbitrage" in message for message in log_messages)
+        assert not any("strategy=conservative_oracle_edge" in message for message in log_messages)
+
+    asyncio.run(run())
+
+
 def test_bot_engine_does_not_place_partial_pair_when_order_cap_is_one(tmp_path) -> None:  # type: ignore[no-untyped-def]
     async def run() -> None:
         store = RuntimeConfigStore(tmp_path / "runtime_config.json")
@@ -571,6 +687,148 @@ def test_bot_engine_logs_strategy_skip_when_risk_rejects_signal(tmp_path) -> Non
             and "requirement=balance insufficient" in message
             for message in log_messages
         )
+
+    asyncio.run(run())
+
+
+def test_bot_engine_places_and_replaces_post_only_maker_order(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update(
+            {
+                "capital_per_trade": 10,
+                "strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 2, "capital_fraction": 1.0}},
+                "strategies": {
+                    "fee_aware_pair_arbitrage": {"enabled": False, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                    "conservative_oracle_edge": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                },
+            }
+        )
+        broadcaster = FakeBroadcaster()
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            broadcaster=broadcaster,
+            scanner=BtcFiveMinuteMakerEdgeScanner(),
+            price_feed=MakerEdgePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        first = await engine.run_once()
+        second = await engine.run_once()
+
+        assert first["orders"] == 1
+        assert second["orders"] == 1
+        assert len(client.orders) == 2
+        log_messages = [event[1]["message"] for event in broadcaster.events if event[0] == "log"]
+        assert client.orders[0].post_only is True
+        assert client.orders[0].price == 0.59
+        assert client.orders[0].client_order_id == "maker:btc-5m-maker-edge:conservative_oracle_edge:YES"
+        assert client.cancelled == ["order-1"]
+        assert any("[BET_DECISION]" in message and "strategy=conservative_oracle_edge" in message for message in log_messages)
+
+    asyncio.run(run())
+
+
+def test_bot_engine_skips_orders_below_clob_minimum_size(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update(
+            {
+                "capital_per_trade": 1,
+                "strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 2, "capital_fraction": 1.0}},
+                "strategies": {
+                    "fee_aware_pair_arbitrage": {"enabled": False, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                    "conservative_oracle_edge": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                },
+            }
+        )
+        broadcaster = FakeBroadcaster()
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            broadcaster=broadcaster,
+            scanner=BtcFiveMinuteMakerEdgeScanner(),
+            price_feed=MakerEdgePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        summary = await engine.run_once()
+        log_messages = [event[1]["message"] for event in broadcaster.events if event[0] == "log"]
+
+        assert summary["orders"] == 0
+        assert client.orders == []
+        assert any("[BET_SKIP]" in message and "reason=size_too_small" in message and "actual=1.000" in message for message in log_messages)
+        assert not any("[BET_DECISION] action=APPROVED" in message for message in log_messages)
+        assert not any(event[0] == "order_attempt" for event in broadcaster.events)
+
+    asyncio.run(run())
+
+
+def test_bot_engine_resolves_missing_target_before_strategy_evaluation(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update(
+            {
+                "capital_per_trade": 10,
+                "strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 2, "capital_fraction": 1.0}},
+                "strategies": {
+                    "fee_aware_pair_arbitrage": {"enabled": False, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                    "conservative_oracle_edge": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                },
+            }
+        )
+        broadcaster = FakeBroadcaster()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=TargetPriceClient(),
+            broadcaster=broadcaster,
+            scanner=BtcFiveMinuteMissingTargetScanner(),
+            price_feed=MakerEdgePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        summary = await engine.run_once()
+        log_messages = [event[1]["message"] for event in broadcaster.events if event[0] == "log"]
+
+        assert summary["orders"] == 1
+        assert not any("reason=missing_price_to_beat" in message for message in log_messages)
+
+    asyncio.run(run())
+
+
+def test_bot_engine_uses_explicit_liquidity_when_book_levels_are_missing(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    async def run() -> None:
+        store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+        store.update(
+            {
+                "capital_per_trade": 10,
+                "strategy_groups": {"conservative_btc_5m": {"enabled": True, "max_orders_per_tick": 2, "capital_fraction": 1.0}},
+                "strategies": {
+                    "fee_aware_pair_arbitrage": {"enabled": False, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                    "conservative_oracle_edge": {"enabled": True, "group": "conservative_btc_5m", "assets": ["BTC"], "timeframes": ["5m"]},
+                },
+            }
+        )
+        client = FakeClient()
+        engine = BotEngine(
+            settings=Settings(paper_mode=True, live_trading=False),
+            client=client,
+            scanner=BtcFiveMinuteExplicitLiquidityScanner(),
+            price_feed=MakerEdgePriceFeed(),
+            oracle=FakeOracle(),
+            runtime_config_store=store,
+        )
+
+        summary = await engine.run_once()
+
+        assert summary["orders"] == 1
+        assert client.orders[0].post_only is True
 
     asyncio.run(run())
 

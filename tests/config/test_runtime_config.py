@@ -58,6 +58,12 @@ def test_runtime_config_defaults_strategy_groups(tmp_path) -> None:  # type: ign
     assert config.strategies["fee_aware_pair_arbitrage"]["enabled"] is True
     assert config.strategies["late_window_discount_hedge"]["enabled"] is False
     assert config.strategies["high_confidence_near_expiry_side"]["enabled"] is False
+    assert config.strategies["conservative_oracle_edge"] == {
+        "enabled": False,
+        "group": "conservative_btc_5m",
+        "assets": ["BTC"],
+        "timeframes": ["5m"],
+    }
 
 
 def test_runtime_config_validates_strategy_shapes(tmp_path) -> None:  # type: ignore[no-untyped-def]

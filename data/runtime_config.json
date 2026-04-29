@@ -1,5 +1,5 @@
 {
-  "capital_per_trade": 1.0,
+  "capital_per_trade": 5.0,
   "depth_buy_discount_percent": 0.05,
   "dynamic_threshold_boost": 0.04,
   "email_loss_alert_pct": 0.0,
@@ -18,11 +18,21 @@
   "second_side_time_threshold_ms": 200.0,
   "solo_log": false,
   "strategies": {
-    "fee_aware_pair_arbitrage": {
+    "conservative_oracle_edge": {
       "assets": [
         "BTC"
       ],
       "enabled": true,
+      "group": "conservative_btc_5m",
+      "timeframes": [
+        "5m"
+      ]
+    },
+    "fee_aware_pair_arbitrage": {
+      "assets": [
+        "BTC"
+      ],
+      "enabled": false,
       "group": "conservative_btc_5m",
       "timeframes": [
         "5m"
@@ -42,7 +52,7 @@
       "assets": [
         "BTC"
       ],
-      "enabled": true,
+      "enabled": false,
       "group": "conservative_btc_5m",
       "timeframes": [
         "5m"

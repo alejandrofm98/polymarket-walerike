@@ -63,6 +63,9 @@ class HedgeSignal:
     reasons: list[str] = field(default_factory=list)
     target_side: str | None = None
     strategy_name: str | None = None
+    order_type: str = "TAKER"
+    post_only: bool = False
+    limit_price: float | None = None
 
 
 @dataclass(slots=True)

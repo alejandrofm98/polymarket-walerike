@@ -48,6 +48,7 @@ function App() {
   const fallbackPoll = useRef<number | null>(null);
   const pendingMarketTick = useRef<Market[] | null>(null);
   const marketTickTimer = useRef<number | null>(null);
+  const configRef = useRef<Config>(emptyConfig);
 
   const summary = useMemo(() => {
     let open = 0;
@@ -170,6 +171,10 @@ function App() {
   }
 
   useEffect(() => {
+    configRef.current = config;
+  }, [config]);
+
+  useEffect(() => {
     Promise.allSettled([
       refreshStatus(),
       refreshConfig(),
@@ -239,7 +244,7 @@ function App() {
           const event = JSON.parse(message.data) as WsEvent;
           if (event.type === "log") {
             const msg = String(event.payload.message);
-            if (shouldShowRealtimeLog(msg)) {
+            if (shouldShowRealtimeLog(msg, configRef.current)) {
               log(msg);
             }
           }
