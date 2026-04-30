@@ -8,14 +8,15 @@ import type { AccountPosition, AccountSummary, AccountTrade } from "@/types";
 export function AccountView({ account, loading, onRefresh }: { account: AccountSummary | null; loading: boolean; onRefresh: () => void }) {
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border border-white/8 bg-white/[0.02] backdrop-blur">
-        <div className="flex items-start justify-between gap-4 border-b border-white/5 px-5 py-4">
+      <div className="editorial-panel">
+        <div className="relative flex items-start justify-between gap-4 border-b editorial-divider px-5 py-5">
           <div>
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <div className="editorial-kicker">Account Ledger</div>
+            <h2 className="editorial-title mt-2 flex items-center gap-2 text-2xl text-foreground">
               <Wallet className="h-4 w-4 text-primary" />
               Real Polymarket Account
             </h2>
-            <p className="mt-0.5 text-xs text-muted-foreground/60">
+            <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground/70">
               Live wallet, positions, trades, and PnL. Paper bot data remains separate.
             </p>
           </div>
@@ -24,7 +25,7 @@ export function AccountView({ account, loading, onRefresh }: { account: AccountS
             Refresh
           </Button>
         </div>
-        <div className="p-4">
+        <div className="relative p-4">
           {!account ? <EmptyState>{loading ? "Loading account" : "No account data loaded"}</EmptyState> : <AccountContent account={account} />}
         </div>
       </div>
@@ -36,14 +37,14 @@ function AccountContent({ account }: { account: AccountSummary }) {
   return (
     <div className="space-y-4">
       {!account.available && (
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           {account.reason || "Real account data unavailable"}
         </div>
       )}
       {account.errors.length > 0 && (
         <div className="space-y-2">
           {account.errors.map((error) => (
-            <div key={`${error.source}-${error.message}`} className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-2 text-sm text-red-200">
+            <div key={`${error.source}-${error.message}`} className="flex items-center gap-2 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-2 text-sm text-red-200">
               <AlertTriangle className="h-4 w-4" />
               <span className="font-semibold">{error.source}</span>
               <span>{error.message}</span>
@@ -70,19 +71,20 @@ function AccountContent({ account }: { account: AccountSummary }) {
 
 function Kpi({ label, value, tone }: { label: string; value: string; tone?: "good" | "bad" | "neutral" }) {
   return (
-    <div className="rounded-lg border border-white/8 bg-white/[0.03] px-4 py-3">
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">{label}</div>
-      <div className={cn("mt-1 font-mono text-2xl font-bold", tone === "good" && "text-emerald-400", tone === "bad" && "text-red-400")}>{value}</div>
+    <div className="editorial-subpanel px-4 py-3">
+      <div className="editorial-kicker">{label}</div>
+      <div className={cn("mt-2 font-mono text-2xl font-bold", tone === "good" && "text-emerald-400", tone === "bad" && "text-red-400")}>{value}</div>
     </div>
   );
 }
 
 function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-white/[0.02]">
-      <div className="border-b border-white/5 px-4 py-3">
-        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-        <p className="text-xs text-muted-foreground/60">{count} row{count === 1 ? "" : "s"}</p>
+    <div className="editorial-subpanel overflow-hidden">
+      <div className="border-b editorial-divider px-4 py-4">
+        <div className="editorial-kicker">Account Detail</div>
+        <h3 className="editorial-title mt-1 text-xl text-foreground">{title}</h3>
+        <p className="mt-1 text-xs text-muted-foreground/60">{count} row{count === 1 ? "" : "s"}</p>
       </div>
       <div className="p-4">{children}</div>
     </div>
@@ -92,17 +94,17 @@ function Section({ title, count, children }: { title: string; count: number; chi
 function PositionsTable({ positions }: { positions: AccountPosition[] }) {
   if (!positions.length) return <EmptyState>No real positions</EmptyState>;
   return (
-    <div className="overflow-x-auto rounded-xl border border-white/8">
-      <table className="w-full text-sm">
-        <thead className="border-b border-white/8 bg-white/[0.02] text-[10px] uppercase tracking-widest text-muted-foreground/60">
+    <div className="editorial-table">
+      <table>
+        <thead>
           <tr>{["Market", "Asset", "Side", "Size", "Avg", "Value", "PnL"].map((h) => <th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}</tr>
         </thead>
-        <tbody className="divide-y divide-white/5">
+        <tbody>
           {positions.map((position, index) => {
             const value = num(position.currentValue ?? position.current_value ?? position.value);
             const pnl = num(position.cashPnl ?? position.unrealized_pnl ?? position.pnl);
             return (
-              <tr key={`${position.market}-${index}`} className="hover:bg-white/[0.02]">
+              <tr key={`${position.market}-${index}`} className="hover:bg-white/[0.025]">
                 <td className="max-w-[220px] truncate px-3 py-2 font-mono text-xs text-muted-foreground/70">{String(position.market || "-")}</td>
                 <td className="px-3 py-2 font-semibold">{position.asset || "-"}</td>
                 <td className="px-3 py-2 font-semibold">{position.side || "-"}</td>
@@ -122,16 +124,16 @@ function PositionsTable({ positions }: { positions: AccountPosition[] }) {
 function TradesTable({ trades }: { trades: AccountTrade[] }) {
   if (!trades.length) return <EmptyState>No real trades</EmptyState>;
   return (
-    <div className="overflow-x-auto rounded-xl border border-white/8">
-      <table className="w-full text-sm">
-        <thead className="border-b border-white/8 bg-white/[0.02] text-[10px] uppercase tracking-widest text-muted-foreground/60">
+    <div className="editorial-table">
+      <table>
+        <thead>
           <tr>{["ID", "Market", "Side", "Size", "Price", "Fee", "Time", "PnL"].map((h) => <th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}</tr>
         </thead>
-        <tbody className="divide-y divide-white/5">
+        <tbody>
           {trades.map((trade, index) => {
             const pnl = num(trade.realized_pnl ?? trade.pnl);
             return (
-              <tr key={`${trade.id}-${index}`} className="hover:bg-white/[0.02]">
+              <tr key={`${trade.id}-${index}`} className="hover:bg-white/[0.025]">
                 <td className="max-w-[120px] truncate px-3 py-2 font-mono text-xs text-muted-foreground/70">{trade.id || "-"}</td>
                 <td className="max-w-[220px] truncate px-3 py-2 font-mono text-xs text-muted-foreground/70">{trade.market || "-"}</td>
                 <td className="px-3 py-2 font-semibold">{trade.side || "-"}</td>

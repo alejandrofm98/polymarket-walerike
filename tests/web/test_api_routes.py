@@ -105,6 +105,28 @@ class FakeCopyDataClient:
     async def full_portfolio(self, wallet: str) -> object:
         raise AssertionError(wallet)
 
+    async def wallet_activity(self, wallet: str) -> list[object]:
+        return []
+
+    async def portfolio_value(self, wallet: str) -> float | None:
+        return None
+
+
+class FakeWalletPortfolio:
+    def __init__(self, *, cash: float, positions_value: float, total: float) -> None:
+        self.cash = cash
+        self.positions_value = positions_value
+        self.total = total
+
+
+class CopyOverviewDataClient:
+    async def full_portfolio(self, wallet: str) -> object:
+        values = {
+            "0xleader1": FakeWalletPortfolio(cash=1.0, positions_value=4.0, total=5.0),
+            "0xleader2": FakeWalletPortfolio(cash=0.5, positions_value=0.0, total=0.5),
+        }
+        return values[wallet]
+
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_routes_control_engine() -> None:
@@ -128,11 +150,11 @@ def test_api_config_persists_and_validates(tmp_path) -> None:  # type: ignore[no
     app = create_app(Settings(paper_mode=True, live_trading=False), {"runtime_config_store": store, "trade_logger": FakeLogger()})
 
     with TestClient(app) as client:
-        response = client.put("/api/config", json={"capital_per_trade": 33, "min_margin_for_arbitrage": 0.04})
+        response = client.put("/api/config", json={"poll_interval_seconds": 33})
         assert response.status_code == 200
-        assert response.json()["capital_per_trade"] == 33.0
-        assert client.get("/api/config").json()["min_margin_for_arbitrage"] == 0.04
-        assert client.put("/api/config", json={"capital_per_trade": 0}).status_code == 400
+        assert response.json()["poll_interval_seconds"] == 33.0
+        assert client.get("/api/config").json()["poll_interval_seconds"] == 33.0
+        assert client.put("/api/config", json={"poll_interval_seconds": 0}).status_code == 400
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
@@ -172,7 +194,8 @@ def test_api_config_switches_mode_without_restart(tmp_path, monkeypatch) -> None
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
-def test_api_config_switches_copy_engine_mode_without_restart(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_api_config_switches_copy_engine_mode_without_restart(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(api_routes_module.importlib.util, "find_spec", lambda name: object() if name == "py_clob_client.client" else None)
     settings = Settings(paper_mode=True, live_trading=True)
     store = RuntimeConfigStore(tmp_path / "runtime_config.json")
     engine = CopyTradingEngine(
@@ -192,6 +215,32 @@ def test_api_config_switches_copy_engine_mode_without_restart(tmp_path) -> None:
     assert payload["requested_paper_mode"] is False
     assert payload["live_blocked"] is False
     assert payload["mode_label"] == "Live"
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_bot_start_resumes_paused_copy_engine(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    settings = Settings(paper_mode=True, live_trading=False)
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    engine = CopyTradingEngine(
+        client=FakeCopyClient(settings),
+        data_client=FakeCopyDataClient(),
+        runtime_config_store=store,
+        paper=True,
+    )
+    app = create_app(settings, {"bot_engine": engine, "runtime_config_store": store, "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        assert client.post("/api/bot/start").json()["runtime"]["status"] == "running"
+        assert client.post("/api/bot/pause").json()["runtime"]["status"] == "paused"
+
+        response = client.post("/api/bot/start")
+
+        assert response.status_code == 200
+        assert response.json()["runtime"]["running"] is True
+        assert response.json()["runtime"]["paused"] is False
+        assert response.json()["runtime"]["status"] == "running"
+
+        client.post("/api/bot/stop")
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
@@ -216,23 +265,6 @@ def test_api_bot_start_returns_clear_error_when_live_sdk_missing() -> None:
 
     assert response.status_code == 400
     assert "py-clob-client" in response.json()["detail"]
-
-
-@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
-def test_api_clears_open_paper_trades(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    trade_logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
-    trade_logger.log_trade_opened(TradeRecord(trade_id="paper", market="m1", asset="BTC", side="YES", entry_price=0.4, size=10, metadata={"paper": True}))
-    trade_logger.log_trade_opened(TradeRecord(trade_id="live", market="m1", asset="BTC", side="NO", entry_price=0.3, size=7, metadata={"paper": False}))
-    app = create_app(Settings(paper_mode=True, live_trading=False), {"trade_logger": trade_logger})
-
-    with TestClient(app) as client:
-        response = client.post("/api/trades/clear-open-paper").json()
-
-    assert response["ok"] is True
-    assert response["cleared"] == 1
-    assert response["trades"][0]["status"] == "CANCELLED"
-    assert trade_logger.get_trade("paper").status == "CANCELLED"  # type: ignore[union-attr]
-    assert trade_logger.get_trade("live").status == "OPEN"  # type: ignore[union-attr]
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
@@ -264,6 +296,101 @@ def test_api_markets_scans_and_fetches_slug() -> None:
         assert client.get("/api/markets/slug/btc-updown-5m-1777069800").json()["asset"] == "BTC"
 
 
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_copy_overview_groups_copy_trades_and_configured_wallets(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    store.update({"paper_mode": False})
+    store.update(
+        {
+            "copy_wallets": [
+                {"address": "0xLeader1", "enabled": True, "sizing_mode": "fixed", "fixed_amount": 10},
+                {"address": "0xLeader2", "enabled": False, "sizing_mode": "leader_percent", "fixed_amount": 0},
+            ]
+        }
+    )
+    trade_logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
+    trade_logger.log_trade_opened(
+        TradeRecord(
+            trade_id="copy-open",
+            market="m1",
+            asset="token-yes",
+            side="YES",
+            entry_price=0.4,
+            size=25.0,
+            metadata={
+                "copy_trade": True,
+                "leader_wallet": "0xleader1",
+                "leader_event_id": "buy-1",
+                "leader_price": 0.4,
+                "leader_size": 25.0,
+                "leader_notional": 10.0,
+                "leader_portfolio_value": 100.0,
+                "sizing_mode": "fixed",
+                "fixed_amount": 10.0,
+                "market_slug": "btc-up",
+                "timeframe": "5m",
+                "asset": "token-yes",
+                "paper": True,
+            },
+        )
+    )
+    trade_logger.log_trade_opened(
+        TradeRecord(
+            trade_id="copy-closed",
+            market="m2",
+            asset="token-no",
+            side="NO",
+            entry_price=0.3,
+            size=10.0,
+            metadata={
+                "copy_trade": True,
+                "leader_wallet": "0xleader1",
+                "leader_event_id": "buy-2",
+                "leader_price": 0.3,
+                "leader_size": 10.0,
+                "leader_notional": 3.0,
+                "leader_portfolio_value": 90.0,
+                "sizing_mode": "leader_percent",
+                "fixed_amount": 0.0,
+                "market_slug": "eth-down",
+                "timeframe": "1h",
+                "asset": "token-no",
+                "paper": True,
+            },
+        )
+    )
+    trade_logger.log_trade_closed("copy-closed", exit_price=0.5)
+    app = create_app(
+        Settings(paper_mode=True, live_trading=False),
+        {
+            "runtime_config_store": store,
+            "trade_logger": trade_logger,
+            "data_client": CopyOverviewDataClient(),
+            "bot_engine": FakeEngine(),
+        },
+    )
+
+    with TestClient(app) as client:
+        payload = client.get("/api/copy-overview").json()
+
+    assert payload["runtime"]["paper_mode"] is True
+    assert payload["runtime"]["requested_paper_mode"] is False
+    assert payload["runtime"]["live_blocked"] is True
+    assert payload["runtime"]["live_block_reason"] == "POLYMARKET_LIVE_TRADING=true required for live mode"
+    assert payload["runtime"]["mode_label"] == "Live blocked"
+    assert payload["summary"] == {"wallet_count": 2, "open_positions": 1, "closed_trades": 1, "realized_pnl": -2.0}
+    wallets = {wallet["address"]: wallet for wallet in payload["wallets"]}
+    assert set(wallets) == {"0xleader1", "0xleader2"}
+    assert wallets["0xleader1"]["tracked_balance"] == {"address": "0xleader1", "enabled": True, "cash": 1.0, "positions_value": 4.0, "total": 5.0}
+    assert wallets["0xleader1"]["stats"] == {"realized_pnl": -2.0, "closed_count": 1}
+    assert len(wallets["0xleader1"]["open_positions"]) == 1
+    assert wallets["0xleader1"]["open_positions"][0]["trade_id"] == "copy-open"
+    assert len(wallets["0xleader1"]["closed_trades"]) == 1
+    assert wallets["0xleader2"]["configured"]["enabled"] is False
+    assert wallets["0xleader2"]["open_positions"] == []
+    assert wallets["0xleader2"]["closed_trades"] == []
+
+
 class FakeAccountClient:
     def __init__(self) -> None:
         self.paper_mode = False
@@ -293,6 +420,7 @@ def test_api_account_returns_live_summary() -> None:
     assert payload["available"] is True
     assert payload["mode"] == "live"
     assert payload["cash_balance"] == 12.5
+    assert payload["allowances"] == {"0xspender": 99.0}
     assert payload["portfolio_value"] == 4.5
     assert payload["total_balance"] == 17.0
     assert payload["unrealized_pnl"] == 0.5
@@ -310,6 +438,7 @@ def test_api_account_returns_partial_errors() -> None:
 
     assert payload["available"] is True
     assert payload["cash_balance"] is None
+    assert payload["allowances"] == {}
     assert payload["positions"][0]["asset"] == "BTC"
     assert payload["errors"] == [{"source": "balances", "message": "balance failed"}]
 

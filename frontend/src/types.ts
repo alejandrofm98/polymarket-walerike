@@ -1,4 +1,4 @@
-export type View = "markets" | "account" | "settings";
+export type View = "overview" | "account" | "settings";
 
 export type Runtime = {
   status?: string;
@@ -26,6 +26,56 @@ export type CopyWalletConfig = {
   enabled: boolean;
   sizing_mode: "leader_percent" | "fixed";
   fixed_amount: number;
+};
+
+export type CopyTradeMetadata = {
+  copy_trade?: boolean;
+  leader_wallet?: string;
+  leader_event_id?: string;
+  leader_price?: number;
+  leader_size?: number;
+  leader_notional?: number;
+  leader_portfolio_value?: number | null;
+  sizing_mode?: CopyWalletConfig["sizing_mode"];
+  fixed_amount?: number;
+  market_slug?: string;
+  timeframe?: string;
+  asset?: string;
+  paper?: boolean;
+  [key: string]: unknown;
+};
+
+export type CopyTradeItem = Omit<Trade, "metadata"> & {
+  metadata?: Trade["metadata"] & CopyTradeMetadata;
+};
+
+export type CopyWalletOverviewStats = {
+  realized_pnl: number;
+  closed_count: number;
+};
+
+export type CopyWalletOverviewConfig = Pick<CopyWalletConfig, "address" | "enabled" | "fixed_amount"> & {
+  sizing_mode: CopyWalletConfig["sizing_mode"] | null;
+};
+
+export type CopyWalletOverview = {
+  address: string;
+  configured: CopyWalletOverviewConfig;
+  tracked_balance?: TrackedWalletBalance;
+  open_positions: CopyTradeItem[];
+  closed_trades: CopyTradeItem[];
+  stats: CopyWalletOverviewStats;
+};
+
+export type CopyOverviewPayload = {
+  runtime: Runtime;
+  summary: {
+    wallet_count: number;
+    open_positions: number;
+    closed_trades: number;
+    realized_pnl: number;
+  };
+  wallets: CopyWalletOverview[];
 };
 
 export type TrackedWalletBalance = {

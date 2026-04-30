@@ -9,6 +9,7 @@ from typing import Any
 
 from bot.config.runtime_config import RuntimeConfigStore, validate_runtime_config
 from bot.core.polymarket_client import OrderRequest, OrderSide, OrderType
+from bot.data.trade_logger import TradeLogger, TradeRecord
 from bot.data.polymarket_data_client import PolymarketDataClient, WalletActivity
 
 
@@ -21,6 +22,7 @@ class CopyTradingEngine:
         runtime_config_store: RuntimeConfigStore | Any,
         broadcaster: Any | None = None,
         user_portfolio_value: Callable[[], float] | None = None,
+        trade_logger: TradeLogger | None = None,
         paper: bool = True,
     ) -> None:
         self.client = client
@@ -28,6 +30,7 @@ class CopyTradingEngine:
         self.runtime_config_store = runtime_config_store
         self.broadcaster = broadcaster
         self.user_portfolio_value = user_portfolio_value or (lambda: 0.0)
+        self.trade_logger = trade_logger
         self.paper = paper
         self.running = False
         self.paused = False
@@ -44,10 +47,10 @@ class CopyTradingEngine:
         self.logger = logging.getLogger("walerike.copy_engine")
 
     async def start(self) -> dict[str, Any]:
+        self.paused = False
         if self.running:
             return self.status()
         self.running = True
-        self.paused = False
         self._task = asyncio.create_task(self._loop())
         await self._log_event("copy bot started")
         return self.status()
@@ -121,13 +124,15 @@ class CopyTradingEngine:
                 summary["events"] += 1
                 if activity.event_id in self._seen_events:
                     continue
-                self._seen_events.add(activity.event_id)
+                result = "skipped"
                 if activity.action == "buy":
                     result = await self._copy_buy(wallet, activity, leader_portfolio)
                     summary[result] += 1
                 elif activity.action == "sell":
                     result = await self._copy_sell(wallet, activity)
                     summary[result] += 1
+                if result in {"copied", "closed", "duplicates"}:
+                    self._seen_events.add(activity.event_id)
         return summary
 
     async def _refresh_user_portfolio(self) -> None:
@@ -188,12 +193,28 @@ class CopyTradingEngine:
             return "skipped"
         self.orders_placed += 1
         self._copied_market_sides.add(market_side)
+        metadata = self._copy_trade_metadata(wallet, activity, leader_portfolio)
         self._copied_positions[(wallet["address"], activity.market_id, activity.side)] = {
             "order_id": order.order_id,
             "size": size,
+            "leader_size": activity.size,
+            "leader_notional": activity.notional,
             "token_id": activity.token_id,
             "price": activity.price,
+            "trade_id": order.order_id,
         }
+        if self.trade_logger is not None:
+            self.trade_logger.log_trade_opened(
+                TradeRecord(
+                    trade_id=order.order_id,
+                    market=activity.market_id,
+                    asset=self._trade_asset(activity),
+                    side="BUY",
+                    entry_price=activity.price,
+                    size=size,
+                    metadata=metadata,
+                )
+            )
         await self._log_event(f"[COPY_TRADE] action=buy wallet={wallet['address']} market={activity.market_id} side={activity.side} price={activity.price:.3f} size={size:.2f}")
         return "copied"
 
@@ -201,8 +222,17 @@ class CopyTradingEngine:
         key = (wallet["address"], activity.market_id, activity.side)
         position = self._copied_positions.get(key)
         if not position:
+            self._seen_events.add(activity.event_id)
             return "skipped"
-        size = min(float(position["size"]), activity.size)
+        remaining_size = float(position["size"])
+        remaining_leader_size = float(position.get("leader_size") or 0.0)
+        remaining_notional = float(position.get("leader_notional") or 0.0)
+        closed_leader_size = min(remaining_leader_size, activity.size) if remaining_leader_size > 0 and activity.size > 0 else 0.0
+        closed_notional = min(remaining_notional, activity.notional) if remaining_notional > 0 and activity.notional > 0 else 0.0
+        if closed_leader_size > 0 and remaining_leader_size > 0:
+            size = remaining_size * (closed_leader_size / remaining_leader_size)
+        else:
+            size = min(remaining_size, activity.size)
         try:
             await self.client.place_order(
                 OrderRequest(
@@ -220,8 +250,19 @@ class CopyTradingEngine:
             await self._log_event(f"[COPY_ERROR] action=sell wallet={wallet['address']} market={activity.market_id} error={exc}", level="error")
             return "skipped"
         self.orders_placed += 1
-        self._copied_positions.pop(key, None)
-        self._copied_market_sides.discard((activity.market_id, activity.side))
+        trade_id = position.get("trade_id") or position.get("order_id")
+        if self.trade_logger is not None and trade_id:
+            self.trade_logger.log_trade_closed(str(trade_id), exit_price=activity.price, size=size)
+        remaining_size = max(0.0, remaining_size - size)
+        remaining_leader_size = max(0.0, remaining_leader_size - closed_leader_size)
+        remaining_notional = max(0.0, remaining_notional - closed_notional)
+        if remaining_size > 1e-9:
+            position["size"] = remaining_size
+            position["leader_size"] = remaining_leader_size
+            position["leader_notional"] = remaining_notional
+        else:
+            self._copied_positions.pop(key, None)
+            self._copied_market_sides.discard((activity.market_id, activity.side))
         await self._log_event(f"[COPY_TRADE] action=sell wallet={wallet['address']} market={activity.market_id} side={activity.side} price={activity.price:.3f} size={size:.2f}")
         return "closed"
 
@@ -232,6 +273,28 @@ class CopyTradingEngine:
             return 0.0
         user_value = self._user_portfolio_cached if self._user_portfolio_cached > 0 else self.user_portfolio_value()
         return user_value * (activity.notional / leader_portfolio)
+
+    def _copy_trade_metadata(self, wallet: dict[str, Any], activity: WalletActivity, leader_portfolio: float | None) -> dict[str, Any]:
+        return {
+            "copy_trade": True,
+            "leader_wallet": str(wallet.get("address") or activity.wallet or "").lower(),
+            "outcome_side": activity.side,
+            "leader_event_id": activity.event_id,
+            "leader_price": activity.price,
+            "leader_size": activity.size,
+            "leader_notional": activity.notional,
+            "leader_portfolio_value": leader_portfolio,
+            "sizing_mode": wallet.get("sizing_mode"),
+            "fixed_amount": float(wallet.get("fixed_amount") or 0.0),
+            "market_slug": getattr(activity, "market_slug", None),
+            "timeframe": getattr(activity, "timeframe", None),
+            "asset": self._trade_asset(activity) or None,
+            "paper": self.paper,
+        }
+
+    @staticmethod
+    def _trade_asset(activity: WalletActivity) -> str:
+        return str(getattr(activity, "asset", None) or activity.token_id or "")
 
     async def _loop(self) -> None:
         while self.running:

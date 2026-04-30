@@ -32,13 +32,14 @@ export function KpiCard({ label, value, valueClassName, sublabel, icon, glow }: 
     blue: "shadow-[0_0_24px_rgba(96,165,250,0.12)]",
   };
   return (
-    <div className={cn("rounded-xl border border-white/8 bg-white/[0.03] p-4 backdrop-blur", glow && glowMap[glow])}>
-      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium uppercase tracking-widest text-muted-foreground/70">
+    <div className={cn("editorial-subpanel relative overflow-hidden p-4", glow && glowMap[glow])}>
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+      <div className="editorial-kicker mb-2 flex items-center gap-1.5 text-muted-foreground/70">
         {icon}
         {label}
       </div>
-      <div className={cn("text-2xl font-bold tracking-tight", valueClassName)}>{value}</div>
-      {sublabel && <div className="mt-0.5 text-xs text-muted-foreground/60">{sublabel}</div>}
+      <div className={cn("font-mono text-2xl font-bold tracking-tight text-foreground", valueClassName)}>{value}</div>
+      {sublabel && <div className="mt-1 text-xs text-muted-foreground/60">{sublabel}</div>}
     </div>
   );
 }

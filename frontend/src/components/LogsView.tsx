@@ -1,26 +1,31 @@
-import { Terminal } from "lucide-react";
+import { ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { EmptyState } from "@/components/shared";
 import { getLogPresentation, tokenizeLogMessage, type LogTone, type LogTokenKind } from "@/lib/logPresentation";
+import { parseLogEntry } from "@/lib/logEntry";
 import { cn } from "@/lib/utils";
 
 interface LogsViewProps {
   logs: string[];
   onClear: () => void;
+  compact?: boolean;
 }
 
-export function LogsView({ logs, onClear }: LogsViewProps) {
+export function LogsView({ logs, onClear, compact = false }: LogsViewProps) {
   return (
-    <div className="overflow-hidden rounded-xl border border-white/8 bg-white/[0.02] shadow-[0_20px_70px_rgba(0,0,0,0.22)] backdrop-blur">
-      <div className="flex items-center justify-between border-b border-white/5 bg-gradient-to-r from-white/[0.045] to-transparent px-5 py-4">
+    <div className={cn("editorial-panel", compact && "opacity-90")}>
+      <div className="relative flex items-center justify-between border-b editorial-divider bg-gradient-to-r from-white/[0.04] to-transparent px-5 py-4">
         <div className="flex items-center gap-2">
-          <div className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-2 text-emerald-300">
-            <Terminal className="h-4 w-4" />
+          <div className="rounded-lg border border-white/10 bg-white/[0.04] p-2 text-muted-foreground/80">
+            <ScrollText className="h-4 w-4" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-foreground">Realtime Log</h2>
-            <p className="mt-0.5 text-xs text-muted-foreground/60">Eventos WebSocket, trades y errores · últimas 80 entradas</p>
+            <div className="editorial-kicker">Support Feed</div>
+            <h2 className="editorial-title mt-1 text-xl text-foreground">Operational notes</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground/60">
+              WebSocket events, copied trades, and runtime errors. Latest {compact ? "40" : "80"} entries.
+            </p>
           </div>
         </div>
         <Button
@@ -32,20 +37,23 @@ export function LogsView({ logs, onClear }: LogsViewProps) {
           Clear
         </Button>
       </div>
-      <div className="p-4">
-        <ScrollArea className="h-[640px] rounded-xl border border-white/8 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.08),_transparent_34%),linear-gradient(180deg,_#080b11_0%,_#05070c_100%)] p-3">
+      <div className="relative p-4">
+        <ScrollArea className={cn(
+          "rounded-2xl border border-white/10 bg-[linear-gradient(180deg,_rgba(7,10,14,0.96)_0%,_rgba(6,8,12,0.98)_100%)] p-3",
+          compact ? "h-[320px]" : "h-[640px]"
+        )}>
           {logs.length ? (
             <ol className="space-y-2">
-              {logs.map((entry, index) => {
-                const [time, ...rest] = entry.split(" ");
-                const message = rest.join(" ");
+              {(compact ? logs.slice(0, 40) : logs).map((entry, index) => {
+                const { time, message } = parseLogEntry(entry);
                 const presentation = getLogPresentation(message);
                 const tokens = tokenizeLogMessage(message);
                 return (
                   <li
                     key={`${entry}-${index}`}
                     className={cn(
-                      "group grid grid-cols-[64px_74px_minmax(0,1fr)] items-start gap-2 rounded-lg border px-2.5 py-2 font-mono text-[11px] leading-relaxed transition-colors",
+                      "group grid items-start gap-2 rounded-2xl border px-3 py-2.5 font-mono text-[11px] leading-relaxed transition-colors",
+                      compact ? "grid-cols-[58px_64px_minmax(0,1fr)]" : "grid-cols-[64px_74px_minmax(0,1fr)]",
                       toneRowClass[presentation.tone]
                     )}
                   >
@@ -81,12 +89,12 @@ export function LogsView({ logs, onClear }: LogsViewProps) {
 }
 
 const toneRowClass: Record<LogTone, string> = {
-  info: "border-white/[0.06] bg-white/[0.025] hover:bg-white/[0.045]",
-  connected: "border-emerald-400/15 bg-emerald-400/[0.055] hover:bg-emerald-400/[0.085]",
-  error: "border-red-400/20 bg-red-500/[0.075] hover:bg-red-500/[0.11]",
-  trade: "border-orange-300/20 bg-orange-400/[0.07] hover:bg-orange-400/[0.105]",
-  decision: "border-sky-300/18 bg-sky-400/[0.065] hover:bg-sky-400/[0.095]",
-  skip: "border-amber-300/16 bg-amber-300/[0.055] hover:bg-amber-300/[0.085]",
+  info: "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]",
+  connected: "border-emerald-400/12 bg-emerald-400/[0.04] hover:bg-emerald-400/[0.06]",
+  error: "border-red-400/16 bg-red-500/[0.05] hover:bg-red-500/[0.08]",
+  trade: "border-orange-300/16 bg-orange-400/[0.045] hover:bg-orange-400/[0.07]",
+  decision: "border-sky-300/15 bg-sky-400/[0.04] hover:bg-sky-400/[0.065]",
+  skip: "border-amber-300/14 bg-amber-300/[0.04] hover:bg-amber-300/[0.06]",
 };
 
 const toneBadgeClass: Record<LogTone, string> = {
@@ -112,5 +120,5 @@ const tokenClass: Record<LogTokenKind, string> = {
   tag: "font-bold text-white/90",
   market: "rounded border border-cyan-300/25 bg-cyan-300/10 px-1.5 py-0.5 font-semibold text-cyan-200",
   strategy: "rounded border px-1.5 py-0.5 font-semibold",
-  field: "text-white/68",
+  field: "text-white/70",
 };

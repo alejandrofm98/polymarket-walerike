@@ -68,6 +68,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
         data_client=data_client,
         broadcaster=broadcaster,
         runtime_config_store=runtime_config_store,
+        trade_logger=trade_logger,
         paper=effective_paper_mode,
     )
     engine._funder_address = settings.funder or settings.external_wallet_address

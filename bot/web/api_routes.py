@@ -214,6 +214,7 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         is_paper = bool(runtime_payload.get("paper_mode", settings.paper_mode))
         unavailable_payload = {
             "cash_balance": None,
+            "allowances": {},
             "portfolio_value": None,
             "total_balance": None,
             "realized_pnl": None,
@@ -268,6 +269,7 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
             "reason": reason,
             "cash_balance": cash_balance,
             "allowance": balances.get("allowance") if isinstance(balances, dict) else None,
+            "allowances": dict(balances.get("allowances") or {}) if isinstance(balances, dict) else {},
             "portfolio_value": portfolio_value,
             "total_balance": total_balance,
             "realized_pnl": _sum_first(trades, ("realized_pnl", "pnl")),
@@ -349,6 +351,59 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
             except Exception as exc:
                 results.append({"address": addr, "error": str(exc)})
         return results
+
+    @router.get("/copy-overview")
+    async def copy_overview() -> dict[str, Any]:
+        runtime_payload = engine.status() if engine is not None and hasattr(engine, "status") else asdict(runtime)
+        runtime_payload.update(runtime_mode_status(runtime_payload))
+        config = config_store.load()
+        configured_wallets = getattr(config, "copy_wallets", []) if hasattr(config, "copy_wallets") else []
+        grouped_by_wallet = {}
+        if trade_logger is not None and hasattr(trade_logger, "group_copy_trades_by_leader_wallet"):
+            grouped_by_wallet = {
+                entry["address"]: entry
+                for entry in trade_logger.group_copy_trades_by_leader_wallet()
+            }
+        tracked_balances = {entry.get("address", "").lower(): entry for entry in await tracked_wallet_balances()}
+
+        wallet_addresses = {str(entry.get("address") or "").lower() for entry in configured_wallets if entry.get("address")}
+        wallet_addresses.update(grouped_by_wallet)
+        wallet_addresses.discard("")
+
+        wallets: list[dict[str, Any]] = []
+        total_open_positions = 0
+        total_closed_trades = 0
+        total_realized_pnl = 0.0
+        configured_by_wallet = {
+            str(entry.get("address") or "").lower(): entry
+            for entry in configured_wallets
+            if entry.get("address")
+        }
+        for wallet_address in sorted(wallet_addresses):
+            grouped_entry = grouped_by_wallet.get(wallet_address, {})
+            wallet_entry = {
+                "address": wallet_address,
+                "configured": configured_by_wallet.get(wallet_address, {"address": wallet_address, "enabled": False, "sizing_mode": None, "fixed_amount": 0.0}),
+                "tracked_balance": tracked_balances.get(wallet_address),
+                "open_positions": grouped_entry.get("open_positions", []),
+                "closed_trades": grouped_entry.get("closed_trades", []),
+                "stats": grouped_entry.get("stats", {"realized_pnl": 0.0, "closed_count": 0}),
+            }
+            total_open_positions += len(wallet_entry["open_positions"])
+            total_closed_trades += len(wallet_entry["closed_trades"])
+            total_realized_pnl += float(wallet_entry["stats"].get("realized_pnl") or 0.0)
+            wallets.append(wallet_entry)
+
+        return {
+            "runtime": runtime_payload,
+            "wallets": wallets,
+            "summary": {
+                "wallet_count": len(wallets),
+                "open_positions": total_open_positions,
+                "closed_trades": total_closed_trades,
+                "realized_pnl": total_realized_pnl,
+            },
+        }
 
     @router.get("/markets")
     async def list_markets() -> list[dict[str, Any]]:

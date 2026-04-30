@@ -76,11 +76,35 @@ class TradeLogger:
         status: str = "CLOSED",
         closed_at: float | None = None,
         pnl: float | None = None,
+        size: float | None = None,
     ) -> TradeRecord | None:
         existing = self.get_trade(trade_id)
         if existing is None:
             return None
-        realized = pnl if pnl is not None else round(self._pnl(existing.side, existing.entry_price, exit_price, existing.size), 10)
+        close_size = min(float(existing.size), float(size if size is not None else existing.size))
+        realized = pnl if pnl is not None else round(self._pnl(existing.side, existing.entry_price, exit_price, close_size), 10)
+        closed_ts = closed_at or time.time()
+        if close_size < float(existing.size):
+            self._execute(
+                "UPDATE trades SET size = :size WHERE trade_id = :trade_id",
+                {"trade_id": trade_id, "size": float(existing.size) - close_size},
+            )
+            return self.log_trade_opened(
+                TradeRecord(
+                    trade_id=f"{trade_id}::close::{time.time_ns()}",
+                    market=existing.market,
+                    asset=existing.asset,
+                    side=existing.side,
+                    entry_price=existing.entry_price,
+                    size=close_size,
+                    status=status,
+                    opened_at=existing.opened_at,
+                    closed_at=closed_ts,
+                    exit_price=exit_price,
+                    pnl=realized,
+                    metadata=existing.metadata,
+                )
+            )
         self._execute(
             """
             UPDATE trades
@@ -90,7 +114,7 @@ class TradeLogger:
             {
                 "trade_id": trade_id,
                 "status": status,
-                "closed_at": closed_at or time.time(),
+                "closed_at": closed_ts,
                 "exit_price": exit_price,
                 "pnl": realized,
             },
@@ -126,7 +150,7 @@ class TradeLogger:
         for trade in self.list_trades(status="OPEN"):
             if trade.market != market:
                 continue
-            exit_price = 1.0 if trade.side.upper() == winner else 0.0
+            exit_price = 1.0 if self._position_side(trade).upper() == winner else 0.0
             metadata = trade.metadata or {}
             fee_paid = float(metadata.get("fee_paid") or 0.0)
             pnl = round((exit_price - float(trade.entry_price)) * float(trade.size) - fee_paid, 10)
@@ -154,7 +178,7 @@ class TradeLogger:
     def list_positions(self) -> list[PositionRecord]:
         grouped: dict[tuple[str, str, str], dict[str, float | str | None]] = {}
         for trade in self.list_trades(status="OPEN"):
-            key = (trade.market, trade.asset, trade.side)
+            key = (trade.market, trade.asset, self._position_side(trade))
             item = grouped.setdefault(key, {"size": 0.0, "cost": 0.0, "timeframe": None, "market_slug": None, "end_date": None, "window_start_timestamp": None})
             item["size"] += float(trade.size)
             item["cost"] += float(trade.entry_price) * float(trade.size)
@@ -221,6 +245,39 @@ class TradeLogger:
             "win_rate": (wins / len(closed)) if closed else 0.0,
             "volume": volume,
         }
+
+    def group_copy_trades_by_leader_wallet(self) -> list[dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for trade in self.list_trades(limit=None):
+            metadata = trade.metadata or {}
+            if not metadata.get("copy_trade"):
+                continue
+            wallet = str(metadata.get("leader_wallet") or "").strip().lower()
+            if not wallet:
+                continue
+            entry = grouped.setdefault(
+                wallet,
+                {
+                    "address": wallet,
+                    "open_positions": [],
+                    "closed_trades": [],
+                    "stats": {"realized_pnl": 0.0, "closed_count": 0},
+                },
+            )
+            payload = asdict(trade)
+            payload["side"] = self._position_side(trade)
+            if trade.status == "OPEN":
+                entry["open_positions"].append(payload)
+                continue
+            entry["closed_trades"].append(payload)
+            entry["stats"]["realized_pnl"] += float(trade.pnl or 0.0)
+            entry["stats"]["closed_count"] += 1
+        return list(grouped.values())
+
+    @staticmethod
+    def _position_side(trade: TradeRecord) -> str:
+        metadata = trade.metadata or {}
+        return str(metadata.get("outcome_side") or trade.side)
 
     def _init_sqlalchemy(self) -> None:
         try:

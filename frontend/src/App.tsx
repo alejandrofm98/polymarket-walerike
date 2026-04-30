@@ -1,19 +1,25 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Header } from "@/components/Header";
-import { MarketsView } from "@/components/markets/MarketsView";
+import { AccountView } from "@/components/AccountView";
 import { AccountHeroPanel } from "@/components/AccountHeroPanel";
+import { CopyOverview } from "@/components/overview/CopyOverview";
 import { SettingsView } from "@/components/SettingsView";
+import {
+  getCopyOverviewPollMs,
+  getHeaderMetrics,
+  getOverviewRuntime,
+  shouldRefreshCopyOverview,
+} from "@/lib/copyOverviewState";
 import { api } from "@/lib/utils2";
 import { shouldShowRealtimeLog } from "@/lib/logFiltering";
-import { mergeMarketTick } from "@/lib/marketMerge";
+import { formatLogEntry } from "@/lib/logEntry";
+import { getTrackedWalletBalancesKey } from "@/lib/trackedWalletBalances";
 import type {
   View,
   Runtime,
   Config,
-  Market,
-  Trade,
-  Position,
   AccountSummary,
+  CopyOverviewPayload,
   WsEvent,
 } from "@/types";
 
@@ -24,46 +30,27 @@ const emptyConfig: Config = {
   solo_log: false,
 };
 
-const MARKET_TICK_THROTTLE_MS = 1000;
-
 function App() {
-  const [activeView, setActiveView] = useState<View>("markets");
+  const [activeView, setActiveView] = useState<View>("overview");
   const [runtime, setRuntime] = useState<Runtime>({ status: "stopped", running: false, paused: false });
   const [socketOnline, setSocketOnline] = useState(false);
   const [config, setConfig] = useState<Config>(emptyConfig);
-  const [markets, setMarkets] = useState<Market[]>([]);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [positions, setPositions] = useState<Position[]>([]);
   const [account, setAccount] = useState<AccountSummary | null>(null);
+  const [copyOverview, setCopyOverview] = useState<CopyOverviewPayload | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
-  const [loadingMarkets, setLoadingMarkets] = useState(false);
+  const [savedTrackedWalletBalancesKey, setSavedTrackedWalletBalancesKey] = useState("");
   const [loadingAccount, setLoadingAccount] = useState(false);
+  const [loadingOverview, setLoadingOverview] = useState(false);
   const [busyControl, setBusyControl] = useState(false);
   const reconnectMs = useRef(500);
-  const fallbackPoll = useRef<number | null>(null);
-  const pendingMarketTick = useRef<Market[] | null>(null);
-  const marketTickTimer = useRef<number | null>(null);
   const configRef = useRef<Config>(emptyConfig);
+  const refreshingCopyOverview = useRef(false);
+  const queuedCopyOverviewRefresh = useRef(false);
 
-  const summary = useMemo(() => {
-    let open = 0;
-    let closed = 0;
-    let pnl = 0;
-    for (const trade of trades) {
-      if (trade.status === "OPEN") open += 1;
-      else closed += 1;
-      pnl += Number(trade.pnl || 0);
-    }
-    return { open, closed, pnl };
-  }, [trades]);
-
-  const activeMarkets = useMemo(
-    () => markets.filter((m) => m.accepting_orders !== false && m.closed !== true).length,
-    [markets]
-  );
+  const headerMetrics = getHeaderMetrics(copyOverview);
 
   function log(message: string) {
-    setLogs((current) => [`${new Date().toLocaleTimeString()} ${message}`, ...current].slice(0, 80));
+    setLogs((current) => [formatLogEntry(message), ...current].slice(0, 80));
   }
 
   async function refreshStatus() {
@@ -73,15 +60,9 @@ function App() {
 
   async function refreshConfig() {
     const data = await api<Config>("/api/config");
-    setConfig({ ...emptyConfig, ...data, paper_mode: data.paper_mode !== false });
-  }
-
-  async function refreshTrades() {
-    setTrades(await api<Trade[]>("/api/trades"));
-  }
-
-  async function refreshPositions() {
-    setPositions(await api<Position[]>("/api/positions"));
+    const nextConfig = { ...emptyConfig, ...data, paper_mode: data.paper_mode !== false };
+    setConfig(nextConfig);
+    setSavedTrackedWalletBalancesKey(getTrackedWalletBalancesKey(nextConfig.copy_wallets));
   }
 
   async function refreshAccount() {
@@ -95,16 +76,33 @@ function App() {
     }
   }
 
-  async function refreshMarkets() {
-    if (loadingMarkets) return;
-    setLoadingMarkets(true);
+  async function refreshCopyOverview(options?: { silent?: boolean }) {
+    if (!options?.silent) setLoadingOverview(true);
     try {
-      setMarkets(await api<Market[]>("/api/markets"));
+      const data = await api<CopyOverviewPayload>("/api/copy-overview");
+      const nextRuntime = getOverviewRuntime(data);
+      if (nextRuntime) setRuntime(nextRuntime);
+      setCopyOverview(data);
     } catch (error) {
-      log(`markets: ${(error as Error).message}`);
+      log(`copy overview: ${(error as Error).message}`);
     } finally {
-      setLoadingMarkets(false);
+      if (!options?.silent) setLoadingOverview(false);
     }
+  }
+
+  function requestCopyOverviewRefresh() {
+    if (refreshingCopyOverview.current) {
+      queuedCopyOverviewRefresh.current = true;
+      return;
+    }
+    refreshingCopyOverview.current = true;
+    refreshCopyOverview({ silent: true })
+      .finally(() => {
+        refreshingCopyOverview.current = false;
+        if (!queuedCopyOverviewRefresh.current) return;
+        queuedCopyOverviewRefresh.current = false;
+        requestCopyOverviewRefresh();
+      });
   }
 
   async function controlBot() {
@@ -121,34 +119,15 @@ function App() {
     }
   }
 
-  async function clearPositions() {
-    try {
-      const result = await api<{ cleared?: number }>("/api/trades/clear-open-positions", { method: "POST" });
-      log(`cleared ${result.cleared || 0} positions`);
-      await Promise.all([refreshTrades(), refreshPositions(), refreshStatus()]);
-    } catch (error) {
-      log((error as Error).message);
-    }
-  }
-
-  async function clearTradeHistory() {
-    if (!window.confirm("Delete all trade history? This cannot be undone.")) return;
-    try {
-      const result = await api<{ cleared?: number }>("/api/trades/clear", { method: "POST" });
-      log(`cleared ${result.cleared || 0} trades`);
-      await Promise.all([refreshTrades(), refreshPositions(), refreshStatus()]);
-    } catch (error) {
-      log((error as Error).message);
-    }
-  }
-
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
       const saved = await api<Config>("/api/config", { method: "PUT", body: JSON.stringify(config) });
-      setConfig({ ...emptyConfig, ...saved, paper_mode: saved.paper_mode !== false });
+      const nextConfig = { ...emptyConfig, ...saved, paper_mode: saved.paper_mode !== false };
+      setConfig(nextConfig);
+      setSavedTrackedWalletBalancesKey(getTrackedWalletBalancesKey(nextConfig.copy_wallets));
       log("settings saved");
-      await Promise.allSettled([refreshStatus(), refreshMarkets()]);
+      await Promise.allSettled([refreshStatus(), refreshCopyOverview()]);
     } catch (error) {
       log((error as Error).message);
     }
@@ -162,10 +141,8 @@ function App() {
     Promise.allSettled([
       refreshStatus(),
       refreshConfig(),
-      refreshTrades(),
-      refreshPositions(),
       refreshAccount(),
-      refreshMarkets(),
+      refreshCopyOverview(),
     ]).then((results) => {
       for (const result of results) {
         if (result.status === "rejected") log((result.reason as Error).message);
@@ -180,39 +157,20 @@ function App() {
   }, [activeView, account, loadingAccount]);
 
   useEffect(() => {
+    const pollMs = getCopyOverviewPollMs(socketOnline);
+    if (pollMs === null) return;
+
+    const pollTimer = window.setInterval(() => {
+      requestCopyOverviewRefresh();
+    }, pollMs);
+
+    return () => window.clearInterval(pollTimer);
+  }, [socketOnline]);
+
+  useEffect(() => {
     let closed = false;
     let ws: WebSocket | null = null;
     let reconnectTimer: number | null = null;
-
-    function startFallbackPolling() {
-      if (fallbackPoll.current !== null) return;
-      fallbackPoll.current = window.setInterval(
-        () => refreshMarkets().catch((error) => log(error.message)),
-        5000
-      );
-    }
-
-    function stopFallbackPolling() {
-      if (fallbackPoll.current === null) return;
-      window.clearInterval(fallbackPoll.current);
-      fallbackPoll.current = null;
-    }
-
-    function flushMarketTick() {
-      marketTickTimer.current = null;
-      const incoming = pendingMarketTick.current;
-      pendingMarketTick.current = null;
-      if (!incoming) return;
-      setMarkets((prev) => {
-        return mergeMarketTick(prev || [], incoming);
-      });
-    }
-
-    function scheduleMarketTick(markets: Market[]) {
-      pendingMarketTick.current = markets;
-      if (marketTickTimer.current !== null) return;
-      marketTickTimer.current = window.setTimeout(flushMarketTick, MARKET_TICK_THROTTLE_MS);
-    }
 
     function connect() {
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -220,8 +178,8 @@ function App() {
       ws.onopen = () => {
         setSocketOnline(true);
         reconnectMs.current = 500;
-        stopFallbackPolling();
         log("ws connected");
+        requestCopyOverviewRefresh();
       };
       ws.onmessage = (message) => {
         try {
@@ -232,14 +190,12 @@ function App() {
               log(msg);
             }
           }
-          if (event.type === "markets" || event.type === "market_tick")
-            scheduleMarketTick(event.payload.markets || []);
-          if (event.type === "positions") setPositions(event.payload.positions || []);
           if (event.type === "bot_status") setRuntime(event.payload || {});
-          if (event.type === "order_placed")
-            Promise.allSettled([refreshTrades(), refreshPositions()]);
+          if (shouldRefreshCopyOverview(event)) {
+            requestCopyOverviewRefresh();
+          }
           if (event.type === "market_resolved" || event.type === "trade_resolved") {
-            Promise.allSettled([refreshTrades(), refreshPositions(), refreshStatus()]);
+            Promise.allSettled([refreshStatus(), refreshAccount()]);
           }
         } catch (error) {
           log(`ws parse: ${(error as Error).message}`);
@@ -247,7 +203,6 @@ function App() {
       };
       ws.onclose = () => {
         setSocketOnline(false);
-        startFallbackPolling();
         if (closed) return;
         reconnectTimer = window.setTimeout(connect, reconnectMs.current);
         reconnectMs.current = Math.min(reconnectMs.current * 2, 10000);
@@ -259,10 +214,6 @@ function App() {
     return () => {
       closed = true;
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
-      if (marketTickTimer.current !== null) window.clearTimeout(marketTickTimer.current);
-      marketTickTimer.current = null;
-      pendingMarketTick.current = null;
-      stopFallbackPolling();
       ws?.close();
     };
   }, []);
@@ -277,33 +228,31 @@ function App() {
         busyControl={busyControl}
         onControlBot={controlBot}
         onExport={() => (window.location.href = "/api/trades/export.csv")}
-        totalPnl={summary.pnl}
-        openPositions={summary.open}
-        activeMarkets={activeMarkets}
+        totalPnl={headerMetrics.totalPnl}
+        openPositions={headerMetrics.openPositions}
+        trackedWallets={headerMetrics.trackedWallets}
       />
 
       <main className="p-4 lg:p-6">
         <section className="min-w-0 space-y-4">
-          <AccountHeroPanel account={account} loading={loadingAccount} />
-          {activeView === "markets" && (
-            <MarketsView
-              markets={markets}
-              trades={trades}
-              positions={positions}
+          {activeView === "overview" && (
+            <CopyOverview
+              overview={copyOverview}
+              loading={loadingOverview}
               logs={logs}
-              loadingMarkets={loadingMarkets}
-              onRefresh={refreshMarkets}
               onClearLogs={() => setLogs([])}
-              onClearPositions={clearPositions}
-              onClearTradeHistory={clearTradeHistory}
             />
           )}
           {activeView === "account" && (
-            <AccountHeroPanel account={account} loading={loadingAccount} />
+            <>
+              <AccountHeroPanel account={account} loading={loadingAccount} />
+              <AccountView account={account} loading={loadingAccount} onRefresh={refreshAccount} />
+            </>
           )}
           {activeView === "settings" && (
             <SettingsView
               config={config}
+              savedTrackedWalletBalancesKey={savedTrackedWalletBalancesKey}
               runtime={runtime}
               setConfig={setConfig}
               onSubmit={saveSettings}

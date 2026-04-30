@@ -7,7 +7,7 @@ import {
   Play,
   TrendingDown,
   TrendingUp,
-  Zap,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,7 @@ interface HeaderProps {
   onExport: () => void;
   totalPnl: number;
   openPositions: number;
-  activeMarkets: number;
+  trackedWallets: number;
 }
 
 export const Header = memo(function Header({
@@ -37,7 +37,7 @@ export const Header = memo(function Header({
   onExport,
   totalPnl,
   openPositions,
-  activeMarkets,
+  trackedWallets,
 }: HeaderProps) {
   const isRunning = runtime.running && !runtime.paused;
   const isPaper = runtime.paper_mode !== false;
@@ -82,9 +82,9 @@ export const Header = memo(function Header({
             valueClass="text-foreground"
           />
           <KpiPill
-            label="Markets"
-            value={String(activeMarkets)}
-            icon={<Zap className="h-3 w-3" />}
+            label="Wallets"
+            value={String(trackedWallets)}
+            icon={<Wallet className="h-3 w-3" />}
             valueClass="text-sky-400"
           />
           <div className="flex items-center gap-1.5 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-1.5">
@@ -136,8 +136,8 @@ export const Header = memo(function Header({
 
       {/* Nav tabs */}
       <div className="flex items-center gap-1 border-t border-white/5 px-4 lg:px-6">
-        <NavTab active={activeView === "markets"} onClick={() => onViewChange("markets")}>
-          Markets
+        <NavTab active={activeView === "overview"} onClick={() => onViewChange("overview")}>
+          Overview
         </NavTab>
         <NavTab active={activeView === "account"} onClick={() => onViewChange("account")}>
           Account
