@@ -153,6 +153,13 @@ class CopyTradingEngine:
             self.skipped += 1
             await self._log_event(f"[COPY_SKIP] reason=duplicate_market_side wallet={wallet['address']} market={activity.market_id} side={activity.side}")
             return "duplicates"
+        if wallet.get("sizing_mode") == "leader_percent" and (leader_portfolio is None or leader_portfolio <= 0):
+            self.skipped += 1
+            reason = "missing_leader_portfolio_value" if leader_portfolio is None else "invalid_leader_portfolio_value"
+            await self._log_event(
+                f"[COPY_SKIP] reason={reason} wallet={wallet['address']} leader_event={activity.event_id}"
+            )
+            return "skipped"
         notional = self._copy_notional(wallet, activity, leader_portfolio)
         if notional <= 0:
             self.skipped += 1
