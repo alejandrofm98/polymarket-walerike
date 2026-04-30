@@ -126,14 +126,15 @@ def test_websocket_payload_builders_and_urls() -> None:
     assert client._ws_url("user") == "wss://ws-subscriptions-clob.polymarket.com/ws/user"
 
 
-def test_env_api_creds_ignore_api_key_without_secret_and_passphrase() -> None:
+def test_env_api_creds_require_complete_values_when_only_api_key_set() -> None:
     client = PolymarketClient(settings=Settings(api_key="key"), paper_mode=False)
 
     class Types:
         class ApiCreds:  # pragma: no cover - must not be constructed for incomplete values
             pass
 
-    assert client._env_api_creds(Types) is None
+    with pytest.raises(RuntimeError, match="POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE"):
+        client._env_api_creds(Types)
 
 
 def test_env_api_creds_require_complete_values_when_secret_or_passphrase_set() -> None:
@@ -176,7 +177,7 @@ def test_build_clob_client_prefers_v2_sdk(monkeypatch) -> None:  # type: ignore[
             self.creds = creds
 
         def create_or_derive_api_key(self):  # type: ignore[no-untyped-def]
-            return "derived-v2"
+            raise AssertionError("client must use configured env creds")
 
     class FakeClientModule:
         ClobClient = FakeClobClient
@@ -224,13 +225,14 @@ def test_build_clob_client_prefers_v2_sdk(monkeypatch) -> None:  # type: ignore[
         raise AssertionError(name)
 
     monkeypatch.setattr(polymarket_client_module.importlib, "import_module", fake_import_module)
-    settings = Settings(paper_mode=False, live_trading=True, private_key="key", chain_id=137)
+    settings = Settings(paper_mode=False, live_trading=True, private_key="key", api_key="key-id", api_secret="secret", api_passphrase="pass", chain_id=137)
     client = PolymarketClient(settings=settings, paper_mode=False)
 
     built = client._build_clob_client()
 
     assert "py_clob_client_v2.client" in imported
     assert built.kwargs["host"] == settings.polymarket_host
+    assert built.kwargs["creds"].api_key == "key-id"
     assert client._sdk["OrderArgs"] is FakeTypesModule.OrderArgsV2
 
 

@@ -407,18 +407,14 @@ class PolymarketClient:
         if self.settings.signature_type is not None:
             kwargs["signature_type"] = self.settings.signature_type
         env_creds = self._env_api_creds(types_module)
+        if env_creds is None and self.settings.live_trading:
+            raise RuntimeError("POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE required for live CLOB access")
         if env_creds is not None:
             kwargs["creds"] = env_creds
-        client = client_module.ClobClient(**kwargs)
-        if env_creds is None and self.settings.live_trading and self.settings.private_key:
-            if hasattr(client, "create_or_derive_api_key"):
-                client.set_api_creds(client.create_or_derive_api_key())
-            elif hasattr(client, "create_or_derive_api_creds"):
-                client.set_api_creds(client.create_or_derive_api_creds())
-        return client
+        return client_module.ClobClient(**kwargs)
 
     def _env_api_creds(self, types_module: Any) -> Any | None:
-        if not any((self.settings.api_secret, self.settings.api_passphrase)):
+        if not any((self.settings.api_key, self.settings.api_secret, self.settings.api_passphrase)):
             return None
         values = (self.settings.api_key, self.settings.api_secret, self.settings.api_passphrase)
         if not all(values):
