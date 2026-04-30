@@ -1,6 +1,6 @@
 {
   "copy_wallets": [],
-  "paper_mode": true,
+  "paper_mode": false,
   "poll_interval_seconds": 5.0,
   "solo_log": false
 }

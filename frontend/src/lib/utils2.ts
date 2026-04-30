@@ -8,10 +8,11 @@ function toMoneyNumber(value: unknown) {
   return Number.isFinite(number) ? number : 0;
 }
 
-export function calculateAccountBalance(account: { cash_balance?: unknown; portfolio_value?: unknown }) {
+export function calculateAccountBalance(account: { cash_balance?: unknown; portfolio_value?: unknown; total_balance?: unknown }) {
   const cash = toMoneyNumber(account.cash_balance);
   const portfolio = toMoneyNumber(account.portfolio_value);
-  return { cash, portfolio, total: cash + portfolio };
+  const total = Number(account.total_balance);
+  return { cash, portfolio, total: Number.isFinite(total) ? total : cash + portfolio };
 }
 
 export function formatBidAsk(_bid?: number | null, ask?: number | null) {

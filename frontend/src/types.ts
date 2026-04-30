@@ -28,6 +28,15 @@ export type CopyWalletConfig = {
   fixed_amount: number;
 };
 
+export type TrackedWalletBalance = {
+  address: string;
+  enabled: boolean;
+  cash?: number;
+  positions_value?: number;
+  total?: number;
+  error?: string;
+};
+
 export type StrategyGroupConfig = {
   enabled: boolean;
   max_orders_per_tick: number;
@@ -145,6 +154,7 @@ export type AccountSummary = {
   cash_balance?: number | null;
   allowance?: number | null;
   portfolio_value?: number | null;
+  total_balance?: number | null;
   realized_pnl?: number | null;
   unrealized_pnl?: number | null;
   positions: AccountPosition[];

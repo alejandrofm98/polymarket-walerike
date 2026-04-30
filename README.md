@@ -51,7 +51,7 @@ Or:
 docker compose up --build
 ```
 
-Live trading is blocked unless both `--live`/`paper=False` and `POLYMARKET_LIVE_TRADING=1` are set. Do not put real private keys in source control. Positions use Polymarket Data API at `/positions?user=<funder>` because `py-clob-client` has no positions method.
+Live trading is blocked unless both `--live`/`paper=False` and `POLYMARKET_LIVE_TRADING=1` are set. `py-clob-client-v2` is installed from `requirements.txt` and required for live CLOB access. Do not put real private keys in source control. Account cash uses CLOB `/balance-allowance`, while position value and open positions use Polymarket Data API `/value?user=<funder>` and `/positions?user=<funder>`.
 
 ## Module Status
 

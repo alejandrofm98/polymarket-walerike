@@ -98,6 +98,7 @@ class PolymarketClient:
         self._clob_client: Any | None = None
         self._sdk: dict[str, Any] = {}
         self._paper_orders: dict[str, OrderResponse] = {}
+        self.data_client: Any | None = None
         self._event_queue: asyncio.Queue[WebSocketEvent] = asyncio.Queue(maxsize=500)
         self._callbacks: list[EventCallback] = []
         self._ws_tasks: list[asyncio.Task[None]] = []
@@ -196,17 +197,46 @@ class PolymarketClient:
     async def get_account_balances(self) -> dict[str, Any]:
         if self.paper_mode:
             return {"available": False, "reason": "live account data requires live mode"}
-        client = self._require_clob_client()
-        if not hasattr(client, "get_balance_allowance"):
-            return {"available": False, "reason": "CLOB client does not expose balance reads"}
-        raw = await self._call_sync(client.get_balance_allowance, self._balance_allowance_params())
-        data = raw if isinstance(raw, dict) else {"raw": raw}
-        return {
-            "available": True,
-            "cash_balance": self._usdc_amount(data.get("balance")),
-            "allowance": self._usdc_amount(data.get("allowance")),
-            "raw": data,
-        }
+        portfolio_value: float | None = None
+        try:
+            client = self._require_clob_client()
+        except Exception:
+            client = None
+        if client is not None and hasattr(client, "get_balance_allowance"):
+            try:
+                raw = await self._call_sync(client.get_balance_allowance, self._balance_allowance_params())
+                data = raw if isinstance(raw, dict) else {"raw": raw}
+                if self.data_client is not None and hasattr(self.data_client, "portfolio_value"):
+                    wallet = self.settings.funder or self.settings.external_wallet_address or ""
+                    if wallet:
+                        portfolio_value = await self.data_client.portfolio_value(wallet)
+                return {
+                    "available": True,
+                    "cash_balance": self._usdc_amount(data.get("balance")),
+                    "portfolio_value": portfolio_value,
+                    "total_balance": self._sum_known_amounts(self._usdc_amount(data.get("balance")), portfolio_value),
+                    "allowances": self._normalize_allowances(data.get("allowances") or data.get("allowance")),
+                    "raw": data,
+                    "source": "clob_and_data_api" if portfolio_value is not None else "clob",
+                }
+            except Exception as exc:
+                logger.warning("CLOB balance failed, trying data client: {}", exc)
+        if self.data_client is not None and hasattr(self.data_client, "portfolio_value"):
+            try:
+                wallet = self.settings.funder or self.settings.external_wallet_address or ""
+                if wallet:
+                    portfolio_value = await self.data_client.portfolio_value(wallet)
+                    return {
+                        "available": portfolio_value is not None,
+                        "cash_balance": None,
+                        "portfolio_value": portfolio_value,
+                        "total_balance": portfolio_value,
+                        "allowances": {},
+                        "source": "data_api",
+                    }
+            except Exception as exc:
+                logger.warning("Data client balance failed: {}", exc)
+        return {"available": False, "reason": "CLOB unavailable and no data client for balance"}
 
     async def get_account_trades(self) -> list[dict[str, Any]]:
         if self.paper_mode:
@@ -681,6 +711,20 @@ class PolymarketClient:
         if amount is None:
             return None
         return amount / 1_000_000 if amount > 10_000 else amount
+
+    @classmethod
+    def _normalize_allowances(cls, value: Any) -> dict[str, float]:
+        if isinstance(value, dict):
+            return {str(key): cls._usdc_amount(item) or 0.0 for key, item in value.items()}
+        amount = cls._usdc_amount(value)
+        return {} if amount is None else {"default": amount}
+
+    @staticmethod
+    def _sum_known_amounts(*values: float | None) -> float | None:
+        numbers = [value for value in values if value is not None]
+        if not numbers:
+            return None
+        return sum(numbers)
 
     @classmethod
     def _normalize_account_trade(cls, item: dict[str, Any]) -> dict[str, Any]:

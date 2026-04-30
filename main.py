@@ -58,7 +58,11 @@ def build_services(settings: Settings) -> dict[str, Any]:
     trade_logger = TradeLogger(settings.database_path)
     broadcaster = WebSocketBroadcaster()
     price_feed = create_price_feed(settings)
-    data_client = PolymarketDataClient(settings.polymarket_data_api_url)
+    data_client = PolymarketDataClient(
+        settings.polymarket_data_api_url,
+        gamma_url=settings.polymarket_gamma_api_url,
+    )
+    client.data_client = data_client
     engine = CopyTradingEngine(
         client=client,
         data_client=data_client,
@@ -66,6 +70,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
         runtime_config_store=runtime_config_store,
         paper=effective_paper_mode,
     )
+    engine._funder_address = settings.funder or settings.external_wallet_address
     return {
         "polymarket_client": client,
         "trade_logger": trade_logger,

@@ -51,7 +51,8 @@ function AccountContent({ account }: { account: AccountSummary }) {
           ))}
         </div>
       )}
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-5">
+        <Kpi label="Total" value={money(account.total_balance)} />
         <Kpi label="Cash" value={money(account.cash_balance)} />
         <Kpi label="Portfolio" value={money(account.portfolio_value)} />
         <Kpi label="Realized PnL" value={money(account.realized_pnl, true)} tone={tone(account.realized_pnl)} />

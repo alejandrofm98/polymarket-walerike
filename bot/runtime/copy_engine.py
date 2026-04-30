@@ -40,6 +40,7 @@ class CopyTradingEngine:
         self._seen_events: set[str] = set()
         self._copied_market_sides: set[tuple[str, str]] = set()
         self._copied_positions: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._user_portfolio_cached: float = 0.0
         self.logger = logging.getLogger("walerike.copy_engine")
 
     async def start(self) -> dict[str, Any]:
@@ -68,6 +69,22 @@ class CopyTradingEngine:
         await self._log_event("copy bot stopped")
         return self.status()
 
+    async def set_paper_mode(self, paper_mode: bool) -> dict[str, Any]:
+        paper_mode = bool(paper_mode)
+        if not paper_mode:
+            settings = getattr(self.client, "settings", None)
+            if settings is not None and not bool(getattr(settings, "live_trading", False)):
+                raise RuntimeError("POLYMARKET_LIVE_TRADING=true required for live mode")
+        self.paper = paper_mode
+        if self.client is not None:
+            if hasattr(self.client, "paper_mode"):
+                self.client.paper_mode = paper_mode
+            settings = getattr(self.client, "settings", None)
+            if settings is not None and hasattr(settings, "paper_mode"):
+                settings.paper_mode = paper_mode
+        await self._log_event(f"trading mode set to {'paper' if paper_mode else 'live'}")
+        return self.status()
+
     def status(self) -> dict[str, Any]:
         return {
             "running": self.running,
@@ -84,6 +101,7 @@ class CopyTradingEngine:
     async def run_once(self) -> dict[str, int]:
         self.ticks += 1
         self.last_tick_at = time.time()
+        await self._refresh_user_portfolio()
         config = self.runtime_config_store.load()
         validate_runtime_config(config)
         summary = {"wallets": 0, "events": 0, "copied": 0, "closed": 0, "duplicates": 0, "skipped": 0}
@@ -111,6 +129,23 @@ class CopyTradingEngine:
                     result = await self._copy_sell(wallet, activity)
                     summary[result] += 1
         return summary
+
+    async def _refresh_user_portfolio(self) -> None:
+        try:
+            if self.client is not None and hasattr(self.client, "data_client") and self.client.data_client is not None:
+                settings = getattr(self.client, "settings", None)
+                funder = settings.funder if settings else None
+                if funder:
+                    portfolio = await self.client.data_client.full_portfolio(funder)
+                    self._user_portfolio_cached = portfolio.total
+                    return
+            if self.data_client is not None and hasattr(self.data_client, "full_portfolio"):
+                funder = getattr(self, "_funder_address", None)
+                if funder:
+                    portfolio = await self.data_client.full_portfolio(funder)
+                    self._user_portfolio_cached = portfolio.total
+        except Exception as exc:
+            self.logger.warning(f"Failed to refresh user portfolio: {exc}")
 
     async def _copy_buy(self, wallet: dict[str, Any], activity: WalletActivity, leader_portfolio: float | None) -> str:
         market_side = (activity.market_id, activity.side)
@@ -188,7 +223,8 @@ class CopyTradingEngine:
             return float(wallet.get("fixed_amount") or 0.0)
         if not leader_portfolio or leader_portfolio <= 0:
             return 0.0
-        return self.user_portfolio_value() * (activity.notional / leader_portfolio)
+        user_value = self._user_portfolio_cached if self._user_portfolio_cached > 0 else self.user_portfolio_value()
+        return user_value * (activity.notional / leader_portfolio)
 
     async def _loop(self) -> None:
         while self.running:

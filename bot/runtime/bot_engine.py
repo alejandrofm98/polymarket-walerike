@@ -187,7 +187,11 @@ class BotEngine:
         self._connected = False
 
         try:
+            # Preserve data_client from previous client if available
+            previous_data_client = getattr(previous_client, "data_client", None)
             self.client = PolymarketClient(settings=self.settings, paper_mode=paper_mode)
+            if previous_data_client is not None:
+                self.client.data_client = previous_data_client
             self.scanner = MarketScanner(self.client, self.settings.market_assets, self.settings.market_timeframes)
             self._apply_runtime_config()
             if was_running:

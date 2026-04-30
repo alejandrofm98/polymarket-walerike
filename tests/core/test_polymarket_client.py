@@ -467,8 +467,77 @@ def test_live_account_balances_use_clob_client_methods() -> None:
         assert await client.get_account_balances() == {
             "available": True,
             "cash_balance": 1.2,
-            "allowance": 3.4,
+            "portfolio_value": None,
+            "total_balance": 1.2,
+            "allowances": {"default": 3.4},
             "raw": {"balance": "1200000", "allowance": "3400000"},
+            "source": "clob",
+        }
+
+    asyncio.run(run())
+
+
+def test_live_account_balances_build_clob_client_when_disconnected() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+
+        @dataclass
+        class FakeBalanceAllowanceParams:
+            asset_type: str
+            signature_type: int = -1
+
+        class FakeClob:
+            def get_balance_allowance(self, params):  # type: ignore[no-untyped-def]
+                assert params.asset_type == "COLLATERAL"
+                return {"balance": "1200000", "allowance": "3400000"}
+
+        client._sdk = {"BalanceAllowanceParams": FakeBalanceAllowanceParams}
+        client._build_clob_client = lambda: FakeClob()  # type: ignore[method-assign]
+
+        assert await client.get_account_balances() == {
+            "available": True,
+            "cash_balance": 1.2,
+            "portfolio_value": None,
+            "total_balance": 1.2,
+            "allowances": {"default": 3.4},
+            "raw": {"balance": "1200000", "allowance": "3400000"},
+            "source": "clob",
+        }
+
+    asyncio.run(run())
+
+
+def test_live_account_balances_include_total_from_data_client() -> None:
+    async def run() -> None:
+        client = PolymarketClient(Settings(paper_mode=False, live_trading=True, funder="0xfunder"), paper_mode=False)
+
+        @dataclass
+        class FakeBalanceAllowanceParams:
+            asset_type: str
+            signature_type: int = -1
+
+        class FakeClob:
+            def get_balance_allowance(self, params):  # type: ignore[no-untyped-def]
+                assert params.asset_type == "COLLATERAL"
+                return {"balance": "1200000", "allowances": {"0xspender": "3400000"}}
+
+        class FakeDataClient:
+            async def portfolio_value(self, wallet: str) -> float | None:
+                assert wallet == "0xfunder"
+                return 4.5
+
+        client._sdk = {"BalanceAllowanceParams": FakeBalanceAllowanceParams}
+        client._clob_client = FakeClob()
+        client.data_client = FakeDataClient()
+
+        assert await client.get_account_balances() == {
+            "available": True,
+            "cash_balance": 1.2,
+            "portfolio_value": 4.5,
+            "total_balance": 5.7,
+            "allowances": {"0xspender": 3.4},
+            "raw": {"balance": "1200000", "allowances": {"0xspender": "3400000"}},
+            "source": "clob_and_data_api",
         }
 
     asyncio.run(run())

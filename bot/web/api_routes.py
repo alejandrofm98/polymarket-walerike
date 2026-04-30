@@ -215,6 +215,7 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         unavailable_payload = {
             "cash_balance": None,
             "portfolio_value": None,
+            "total_balance": None,
             "realized_pnl": None,
             "unrealized_pnl": None,
             "positions": [],
@@ -223,8 +224,6 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         }
         if client is None:
             return {"available": False, "mode": "unavailable", "reason": "polymarket client unavailable", **unavailable_payload}
-        if is_paper:
-            return {"available": False, "mode": "paper", "reason": "live account data requires live mode", **unavailable_payload}
 
         errors: list[dict[str, str]] = []
         balances: dict[str, Any] = {}
@@ -251,13 +250,26 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         except Exception as exc:  # noqa: BLE001 - account screen supports partial failures
             errors.append({"source": "trades", "message": str(exc)})
 
+        mode = "paper" if is_paper else "live"
+        available = balances.get("available", False) if isinstance(balances, dict) else False
+        reason = balances.get("reason") if isinstance(balances, dict) else None
+        cash_balance = balances.get("cash_balance") if isinstance(balances, dict) and "cash_balance" in balances else balances.get("cash") if isinstance(balances, dict) else None
+        portfolio_value = balances.get("portfolio_value") if isinstance(balances, dict) and "portfolio_value" in balances else _sum_first(positions, ("currentValue", "current_value", "value"))
+        total_balance = balances.get("total_balance") if isinstance(balances, dict) and "total_balance" in balances else _sum_first([
+            {"value": cash_balance},
+            {"value": portfolio_value},
+        ], ("value",))
+        if not available:
+            available = any((cash_balance is not None, portfolio_value is not None, total_balance is not None, positions, trades))
+
         return {
-            "available": True,
-            "mode": "live",
-            "reason": None,
-            "cash_balance": balances.get("cash_balance"),
-            "allowance": balances.get("allowance"),
-            "portfolio_value": _sum_first(positions, ("currentValue", "current_value", "value")),
+            "available": available,
+            "mode": mode,
+            "reason": reason,
+            "cash_balance": cash_balance,
+            "allowance": balances.get("allowance") if isinstance(balances, dict) else None,
+            "portfolio_value": portfolio_value,
+            "total_balance": total_balance,
             "realized_pnl": _sum_first(trades, ("realized_pnl", "pnl")),
             "unrealized_pnl": _sum_first(positions, ("cashPnl", "unrealized_pnl", "pnl")),
             "positions": positions,
@@ -312,6 +324,31 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         if client is not None and hasattr(client, "get_positions"):
             return await client.get_positions()
         return []
+
+    @router.get("/tracked-wallet-balances")
+    async def tracked_wallet_balances() -> list[dict[str, Any]]:
+        config = config_store.load()
+        copy_wallets = getattr(config, "copy_wallets", []) if hasattr(config, "copy_wallets") else config.get("copy_wallets", []) if isinstance(config, dict) else []
+        data_client = services.get("data_client")
+        if data_client is None or not hasattr(data_client, "full_portfolio"):
+            return [{"address": w.get("address", ""), "error": "data_client unavailable"} for w in copy_wallets]
+        results = []
+        for wallet in copy_wallets:
+            addr = wallet.get("address", "") if isinstance(wallet, dict) else ""
+            if not addr:
+                continue
+            try:
+                portfolio = await data_client.full_portfolio(addr)
+                results.append({
+                    "address": addr,
+                    "enabled": wallet.get("enabled", True) if isinstance(wallet, dict) else True,
+                    "cash": portfolio.cash,
+                    "positions_value": portfolio.positions_value,
+                    "total": portfolio.total,
+                })
+            except Exception as exc:
+                results.append({"address": addr, "error": str(exc)})
+        return results
 
     @router.get("/markets")
     async def list_markets() -> list[dict[str, Any]]:

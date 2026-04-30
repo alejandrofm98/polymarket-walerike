@@ -1,11 +1,12 @@
-import { FormEvent } from "react";
-import { AlertTriangle, FlaskConical, Zap, Plus, Trash2 } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
+import { AlertTriangle, FlaskConical, Zap, Plus, Trash2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
-import type { Config, CopyWalletConfig, Runtime } from "@/types";
+import { api } from "@/lib/utils2";
+import type { Config, CopyWalletConfig, Runtime, TrackedWalletBalance } from "@/types";
 
 interface SettingsViewProps {
   config: Config;
@@ -16,6 +17,24 @@ interface SettingsViewProps {
 
 export function SettingsView({ config, runtime, setConfig, onSubmit }: SettingsViewProps) {
   const copyWallets = config.copy_wallets || [];
+  const [walletBalances, setWalletBalances] = useState<TrackedWalletBalance[]>([]);
+  const [loadingBalances, setLoadingBalances] = useState(false);
+
+  useEffect(() => {
+    if (copyWallets.length === 0) {
+      setWalletBalances([]);
+      return;
+    }
+    setLoadingBalances(true);
+    api<TrackedWalletBalance[]>("/api/tracked-wallet-balances")
+      .then(setWalletBalances)
+      .catch(() => setWalletBalances([]))
+      .finally(() => setLoadingBalances(false));
+  }, [config.copy_wallets]);
+
+  function getBalanceForWallet(address: string): TrackedWalletBalance | undefined {
+    return walletBalances.find(w => w.address === address);
+  }
 
   function addWallet() {
     setConfig((current) => ({
@@ -82,12 +101,24 @@ export function SettingsView({ config, runtime, setConfig, onSubmit }: SettingsV
                       className="border-white/10 bg-white/[0.03] font-mono text-xs"
                     />
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      checked={wallet.enabled}
-                      onCheckedChange={(checked) => updateWallet(index, "enabled", checked)}
-                    />
-                    <Label className="text-xs text-muted-foreground/60">Enabled</Label>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={wallet.enabled}
+                        onCheckedChange={(checked) => updateWallet(index, "enabled", checked)}
+                      />
+                      <Label className="text-xs text-muted-foreground/60">Enabled</Label>
+                    </div>
+                    {wallet.address && getBalanceForWallet(wallet.address) && (
+                      <div className="text-xs font-mono text-muted-foreground/80 flex items-center gap-1">
+                        <Wallet className="h-3 w-3" />
+                        {loadingBalances ? (
+                          <span className="animate-pulse">Loading...</span>
+                        ) : (
+                          <span>${getBalanceForWallet(wallet.address)?.total?.toFixed(2) || "0.00"}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div>
                     <Label className="text-xs text-muted-foreground/60">Sizing Mode</Label>

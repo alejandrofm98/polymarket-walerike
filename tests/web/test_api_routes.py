@@ -5,6 +5,7 @@ import pytest
 from bot.config.settings import Settings
 from bot.config.runtime_config import RuntimeConfigStore
 from bot.data.trade_logger import PositionRecord, TradeLogger, TradeRecord
+from bot.runtime.copy_engine import CopyTradingEngine
 import bot.web.api_routes as api_routes_module
 from bot.web.server import create_app
 
@@ -93,6 +94,18 @@ class FakePolymarketClient:
         return {"slug": slug, "markets": []}
 
 
+class FakeCopyClient:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.paper_mode = settings.paper_mode
+        self.data_client = None
+
+
+class FakeCopyDataClient:
+    async def full_portfolio(self, wallet: str) -> object:
+        raise AssertionError(wallet)
+
+
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_routes_control_engine() -> None:
     engine = FakeEngine()
@@ -152,6 +165,29 @@ def test_api_config_switches_mode_without_restart(tmp_path, monkeypatch) -> None
         payload = client.get("/api/status").json()
 
     assert engine.paper is False
+    assert payload["paper_mode"] is False
+    assert payload["requested_paper_mode"] is False
+    assert payload["live_blocked"] is False
+    assert payload["mode_label"] == "Live"
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_config_switches_copy_engine_mode_without_restart(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    settings = Settings(paper_mode=True, live_trading=True)
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    engine = CopyTradingEngine(
+        client=FakeCopyClient(settings),
+        data_client=FakeCopyDataClient(),
+        runtime_config_store=store,
+        paper=True,
+    )
+    app = create_app(settings, {"bot_engine": engine, "runtime_config_store": store, "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        response = client.put("/api/config", json={"paper_mode": False})
+        assert response.status_code == 200
+        payload = client.get("/api/status").json()
+
     assert payload["paper_mode"] is False
     assert payload["requested_paper_mode"] is False
     assert payload["live_blocked"] is False
@@ -233,7 +269,7 @@ class FakeAccountClient:
         self.paper_mode = False
 
     async def get_account_balances(self) -> dict[str, object]:
-        return {"available": True, "cash_balance": 12.5, "allowance": 99.0, "raw": {}}
+        return {"available": True, "cash_balance": 12.5, "portfolio_value": 4.5, "total_balance": 17.0, "allowances": {"0xspender": 99.0}, "raw": {}}
 
     async def get_positions(self) -> list[dict[str, object]]:
         return [{"market": "m1", "asset": "BTC", "side": "YES", "size": 10, "avg_price": 0.4, "currentValue": 4.5, "cashPnl": 0.5}]
@@ -258,6 +294,7 @@ def test_api_account_returns_live_summary() -> None:
     assert payload["mode"] == "live"
     assert payload["cash_balance"] == 12.5
     assert payload["portfolio_value"] == 4.5
+    assert payload["total_balance"] == 17.0
     assert payload["unrealized_pnl"] == 0.5
     assert payload["positions"][0]["asset"] == "BTC"
     assert payload["trades"][0]["id"] == "t1"
@@ -275,3 +312,20 @@ def test_api_account_returns_partial_errors() -> None:
     assert payload["cash_balance"] is None
     assert payload["positions"][0]["asset"] == "BTC"
     assert payload["errors"] == [{"source": "balances", "message": "balance failed"}]
+
+
+class ZeroAccountClient(FakeAccountClient):
+    async def get_account_balances(self) -> dict[str, object]:
+        return {"available": True, "cash_balance": 0.0, "portfolio_value": 0.0, "total_balance": 0.0, "allowances": {}, "raw": {}}
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_account_preserves_zero_balances() -> None:
+    app = create_app(Settings(paper_mode=False, live_trading=True), {"polymarket_client": ZeroAccountClient(), "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        payload = client.get("/api/account").json()
+
+    assert payload["cash_balance"] == 0.0
+    assert payload["portfolio_value"] == 0.0
+    assert payload["total_balance"] == 0.0

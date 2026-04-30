@@ -1073,3 +1073,42 @@ def test_bot_engine_prefers_official_gamma_resolution(tmp_path) -> None:  # type
         assert resolved_events[0][1]["resolution_source"] == "official_gamma"
 
     asyncio.run(run())
+
+
+def test_bot_engine_preserves_data_client_on_paper_mode_switch() -> None:
+    async def run() -> None:
+        # Create a data client to be preserved
+        from bot.data.polymarket_data_client import PolymarketDataClient
+        data_client = PolymarketDataClient("https://example.com")
+
+        # Create a polymarket client and attach the data client
+        from bot.core.polymarket_client import PolymarketClient
+        settings = Settings(paper_mode=True, live_trading=False)
+        client = PolymarketClient(settings=settings, paper_mode=True)
+        client.data_client = data_client
+
+        # Create engine with that client
+        engine = BotEngine(
+            settings=settings,
+            client=client,
+            scanner=FakeScanner(),
+            price_feed=FakePriceFeed(),
+            oracle=FakeOracle(),
+        )
+
+        # Verify initial data client is set
+        assert engine.client.data_client is data_client
+
+        # Switch to live mode (should preserve data_client)
+        await engine.set_paper_mode(False)
+
+        # After switch, the new client should still have the data client
+        assert engine.client.data_client is data_client
+
+        # Switch back to paper mode
+        await engine.set_paper_mode(True)
+
+        # Should still be preserved
+        assert engine.client.data_client is data_client
+
+    asyncio.run(run())
