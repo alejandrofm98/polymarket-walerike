@@ -40,7 +40,6 @@ function App() {
   const [savedTrackedWalletBalancesKey, setSavedTrackedWalletBalancesKey] = useState("");
   const [loadingAccount, setLoadingAccount] = useState(false);
   const [loadingOverview, setLoadingOverview] = useState(false);
-  const [busyControl, setBusyControl] = useState(false);
   const reconnectMs = useRef(500);
   const configRef = useRef<Config>(emptyConfig);
   const refreshingCopyOverview = useRef(false);
@@ -102,20 +101,6 @@ function App() {
         queuedCopyOverviewRefresh.current = false;
         requestCopyOverviewRefresh();
       });
-  }
-
-  async function controlBot() {
-    const action = runtime.running && !runtime.paused ? "pause" : "start";
-    setBusyControl(true);
-    try {
-      const data = await api<{ runtime: Runtime }>(`/api/bot/${action}`, { method: "POST" });
-      setRuntime(data.runtime || {});
-      log(`control ${action}`);
-    } catch (error) {
-      log((error as Error).message);
-    } finally {
-      setBusyControl(false);
-    }
   }
 
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
@@ -224,8 +209,6 @@ function App() {
         onViewChange={setActiveView}
         runtime={runtime}
         socketOnline={socketOnline}
-        busyControl={busyControl}
-        onControlBot={controlBot}
         onExport={() => (window.location.href = "/api/trades/export.csv")}
         totalPnl={headerMetrics.totalPnl}
         openPositions={headerMetrics.openPositions}

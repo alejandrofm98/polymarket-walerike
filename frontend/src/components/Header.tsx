@@ -3,8 +3,6 @@ import {
   Activity,
   Bot,
   Download,
-  Pause,
-  Play,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -19,8 +17,6 @@ interface HeaderProps {
   onViewChange: (view: View) => void;
   runtime: Runtime;
   socketOnline: boolean;
-  busyControl: boolean;
-  onControlBot: () => void;
   onExport: () => void;
   totalPnl: number;
   openPositions: number;
@@ -32,8 +28,6 @@ export const Header = memo(function Header({
   onViewChange,
   runtime,
   socketOnline,
-  busyControl,
-  onControlBot,
   onExport,
   totalPnl,
   openPositions,
@@ -94,20 +88,6 @@ export const Header = memo(function Header({
 
         {/* Actions */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={onControlBot}
-            disabled={busyControl}
-            className={cn(
-              "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all",
-              isRunning
-                ? "border border-white/15 bg-white/8 text-foreground hover:bg-white/12"
-                : "bg-primary text-white shadow-[0_0_20px_rgba(249,115,22,0.3)] hover:bg-primary/90",
-              busyControl && "opacity-50"
-            )}
-          >
-            {isRunning ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            {isRunning ? "Pause" : "Start"}
-          </button>
           <Button
             variant="outline"
             size="sm"

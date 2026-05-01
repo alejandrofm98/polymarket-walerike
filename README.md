@@ -15,7 +15,7 @@ python3 main.py
 
 Dashboard: http://127.0.0.1:8000
 
-Dashboard controls start, pause, stop, and solo-log mode; running `main.py` does not auto-trade.
+Running `main.py` starts the copy engine automatically. Pause or resume individual copied wallets from Settings with each wallet's play/pause control.
 
 Market reads use Polymarket Gamma API (`POLYMARKET_GAMMA_API_URL`, default `https://gamma-api.polymarket.com`) and public CLOB book endpoints (`POLYMARKET_HOST`, default `https://clob.polymarket.com`). Order placement uses configured CLOB credentials.
 
@@ -60,7 +60,7 @@ docker compose up --build
 - `bot/core/polymarket_rtds_feed.py`: async Polymarket RTDS crypto price feed.
 - `bot/core/risk_manager.py`: pure pre-trade risk checks and size adjustment.
 - `bot/core/hedge_strategy.py`: signal generation only; no order execution.
-- `bot/runtime/copy_engine.py`: async copytrading lifecycle runner behind API controls.
+- `bot/runtime/copy_engine.py`: async copytrading lifecycle runner that auto-starts with the web app.
 - `bot/web/api_routes.py`: dashboard API controls and Gamma market scan endpoints wired to the runtime engine when present.
 
 Next verification command:

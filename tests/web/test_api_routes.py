@@ -19,12 +19,14 @@ class FakeEngine:
         self.running = False
         self.paused = False
         self.solo_log = False
+        self.start_calls = 0
 
     def status(self) -> dict[str, object]:
         status = "paused" if self.paused else "running" if self.running else "stopped"
         return {"running": self.running, "paused": self.paused, "solo_log": self.solo_log, "status": status}
 
     async def start(self) -> dict[str, object]:
+        self.start_calls += 1
         self.running = True
         self.paused = False
         return self.status()
@@ -160,6 +162,16 @@ def test_api_routes_control_engine() -> None:
         assert client.get("/api/positions").json()[0]["asset"] == "BTC"
         assert "trade_id" in client.get("/api/trades/export.csv").text
         assert client.post("/api/bot/stop").json()["runtime"]["status"] == "stopped"
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_app_auto_starts_copy_engine_on_startup() -> None:
+    engine = FakeEngine()
+    app = create_app(Settings(), {"bot_engine": engine, "trade_logger": FakeLogger()})
+
+    with TestClient(app):
+        assert engine.start_calls == 1
+        assert engine.running is True
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")

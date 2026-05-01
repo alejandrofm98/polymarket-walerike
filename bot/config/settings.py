@@ -78,7 +78,7 @@ class Settings:
     market_assets: tuple[str, ...] = ("BTC", "ETH", "SOL")
     market_timeframes: tuple[str, ...] = ("5m", "15m", "1h")
     price_feed_source: str = DEFAULT_PRICE_FEED_SOURCE
-    auto_start_bot: bool = False
+    auto_start_bot: bool = True
     bot_start_timeout_seconds: float = 20.0
     polygonscan_api_key: str | None = None
 
@@ -113,7 +113,7 @@ class Settings:
             market_assets=_env_tuple("MARKET_ASSETS", ("BTC", "ETH", "SOL")),
             market_timeframes=_env_tuple("MARKET_TIMEFRAMES", ("5m", "15m", "1h")),
             price_feed_source=os.getenv("PRICE_FEED_SOURCE", DEFAULT_PRICE_FEED_SOURCE),
-            auto_start_bot=_env_bool("AUTO_START_BOT", False),
+            auto_start_bot=_env_bool("AUTO_START_BOT", True),
             bot_start_timeout_seconds=float(os.getenv("BOT_START_TIMEOUT_SECONDS", "20")),
             polygonscan_api_key=os.getenv("POLYGONSCAN_API_KEY") or None,
         )

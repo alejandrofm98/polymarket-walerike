@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Plus, Trash2, Wallet } from "lucide-react";
+import { Pause, Play, Plus, Trash2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -119,7 +119,10 @@ export function SettingsView({ config, savedTrackedWalletBalancesKey, runtime, s
                         checked={wallet.enabled}
                         onCheckedChange={(checked) => updateWallet(index, "enabled", checked)}
                       />
-                      <Label className="text-xs text-muted-foreground/70">Active for mirroring</Label>
+                      <Label className="flex items-center gap-1.5 text-xs text-muted-foreground/70">
+                        {wallet.enabled ? <Pause className="h-3 w-3 text-emerald-400" /> : <Play className="h-3 w-3 text-muted-foreground" />}
+                        {wallet.enabled ? "Pause this wallet" : "Play this wallet"}
+                      </Label>
                     </div>
                     {wallet.address && getBalanceForWallet(wallet.address) && (
                       <div className="flex items-center gap-1 text-xs font-mono text-muted-foreground/80">
