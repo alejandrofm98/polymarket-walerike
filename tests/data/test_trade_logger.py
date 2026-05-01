@@ -66,24 +66,6 @@ def test_trade_logger_resolves_market_winner_and_loser(tmp_path) -> None:  # typ
     assert logger.list_positions() == []
 
 
-def test_trade_logger_cancels_only_open_paper_trades(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
-    logger.log_trade_opened(TradeRecord(trade_id="paper", market="m1", asset="BTC", side="YES", entry_price=0.4, size=10, metadata={"paper": True}))
-    logger.log_trade_opened(TradeRecord(trade_id="live", market="m1", asset="BTC", side="NO", entry_price=0.3, size=7, metadata={"paper": False}))
-    logger.log_trade_opened(TradeRecord(trade_id="closed", market="m1", asset="BTC", side="YES", entry_price=0.2, size=5, metadata={"paper": True}))
-    logger.log_trade_closed("closed", exit_price=0.5)
-
-    cancelled = logger.cancel_open_paper_trades()
-
-    assert [trade.trade_id for trade in cancelled] == ["paper"]
-    paper = logger.get_trade("paper")
-    live = logger.get_trade("live")
-    closed = logger.get_trade("closed")
-    assert paper is not None and paper.status == "CANCELLED" and paper.exit_price == 0.4 and paper.pnl == 0.0
-    assert live is not None and live.status == "OPEN"
-    assert closed is not None and closed.status == "CLOSED"
-
-
 def test_trade_logger_clears_all_trades(tmp_path) -> None:  # type: ignore[no-untyped-def]
     logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
     logger.log_trade_opened(TradeRecord(trade_id="open", market="m1", asset="BTC", side="YES", entry_price=0.4, size=10))

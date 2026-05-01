@@ -40,9 +40,6 @@ export const Header = memo(function Header({
   trackedWallets,
 }: HeaderProps) {
   const isRunning = runtime.running && !runtime.paused;
-  const isPaper = runtime.paper_mode !== false;
-  const liveBlocked = runtime.live_blocked === true;
-  const modeLabel = liveBlocked ? "Live blocked" : isPaper ? "Paper" : "Live trading";
 
   return (
     <header className="sticky top-0 z-30 border-b border-white/8 bg-[#080b11]/90 backdrop-blur-2xl">
@@ -92,17 +89,6 @@ export const Header = memo(function Header({
             <span className={cn("text-xs font-medium", socketOnline ? "text-emerald-400" : "text-muted-foreground")}>
               {socketOnline ? "Online" : "Offline"}
             </span>
-          </div>
-          <div className={cn(
-            "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold uppercase tracking-wide shadow-lg",
-            liveBlocked
-              ? "border-red-500/40 bg-red-500/10 text-red-300 shadow-red-950/20"
-              : isPaper
-              ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
-              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-emerald-950/20"
-          )}>
-            <PulsingDot color={liveBlocked ? "red" : isPaper ? "amber" : "green"} />
-            {modeLabel}
           </div>
         </div>
 

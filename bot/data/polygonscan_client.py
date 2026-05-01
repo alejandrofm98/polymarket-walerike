@@ -6,9 +6,9 @@ import httpx
 
 logger = logging.getLogger("walerike.polygonscan")
 
-PUSD_CONTRACT = "0x9Cb2f26A23b8d89973F08c957C4d7cdf75CD341c"
+PUSD_CONTRACT = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb"
 PUSD_DECIMALS = 6
-POLYGONSCAN_API_URL = "https://api.polygonscan.com/api"
+POLYGONSCAN_API_URL = "https://api.etherscan.io/v2/api"
 
 
 class PolygonScanClient:
@@ -26,6 +26,7 @@ class PolygonScanClient:
                 response = await client.get(
                     POLYGONSCAN_API_URL,
                     params={
+                        "chainid": 137,
                         "module": "account",
                         "action": "tokenbalance",
                         "contractaddress": PUSD_CONTRACT,

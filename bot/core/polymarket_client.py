@@ -1,4 +1,4 @@
-"""Async Polymarket CLOB client wrapper with paper trading support."""
+"""Async Polymarket CLOB client wrapper."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import time
 import json
 import urllib.parse
 import urllib.request
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -19,7 +18,7 @@ from typing import Any, Awaitable, Callable
 
 try:
     from loguru import logger
-except ImportError:  # pragma: no cover - keeps paper/tests usable before deps install
+except ImportError:  # pragma: no cover - keeps tests usable before deps install
     class _FallbackLogger:
         def __init__(self) -> None:
             self._logger = logging.getLogger(__name__)
@@ -92,12 +91,10 @@ EventCallback = Callable[[WebSocketEvent], Awaitable[None] | None]
 
 
 class PolymarketClient:
-    def __init__(self, settings: Settings | None = None, paper_mode: bool | None = None) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings.from_env()
-        self.paper_mode = self.settings.paper_mode if paper_mode is None else paper_mode
         self._clob_client: Any | None = None
         self._sdk: dict[str, Any] = {}
-        self._paper_orders: dict[str, OrderResponse] = {}
         self.data_client: Any | None = None
         self._event_queue: asyncio.Queue[WebSocketEvent] = asyncio.Queue(maxsize=500)
         self._callbacks: list[EventCallback] = []
@@ -106,13 +103,9 @@ class PolymarketClient:
 
     async def connect(self) -> None:
         self._closed = False
-        if self.paper_mode:
-            logger.info("Polymarket client connected in paper mode")
-            return
-        self._ensure_live_trading_enabled()
         self._clob_client = self._build_clob_client()
         self._log_live_signing_config(self._clob_client)
-        logger.info("Polymarket client connected in live mode")
+        logger.info("Polymarket client connected")
 
     async def close(self) -> None:
         self._closed = True
@@ -125,8 +118,6 @@ class PolymarketClient:
         logger.info("Polymarket client closed")
 
     async def get_markets(self) -> Any:
-        if self.paper_mode:
-            return []
         client = self._require_clob_client()
         return await self._call_sync(client.get_markets)
 
@@ -173,30 +164,22 @@ class PolymarketClient:
         return await self._call_sync(self._fetch_json_url, url)
 
     async def get_orders(self) -> Any:
-        if self.paper_mode:
-            return list(self._paper_orders.values())
         client = self._require_clob_client()
         if hasattr(client, "get_open_orders"):
             return await self._call_sync(client.get_open_orders)
         return await self._call_sync(client.get_orders)
 
     async def get_trades(self) -> Any:
-        if self.paper_mode:
-            return []
         client = self._require_clob_client()
         return await self._call_sync(client.get_trades)
 
     async def get_positions(self) -> Any:
-        if self.paper_mode:
-            return []
         if not self.settings.funder:
             logger.warning("POLYMARKET_FUNDER required for positions Data API")
             return []
         return await self._call_sync(self._fetch_positions, self.settings.funder)
 
     async def get_account_balances(self) -> dict[str, Any]:
-        if self.paper_mode:
-            return {"available": False, "reason": "live account data requires live mode"}
         portfolio_value: float | None = None
         try:
             client = self._require_clob_client()
@@ -239,8 +222,6 @@ class PolymarketClient:
         return {"available": False, "reason": "CLOB unavailable and no data client for balance"}
 
     async def get_account_trades(self) -> list[dict[str, Any]]:
-        if self.paper_mode:
-            return []
         raw = await self.get_trades()
         if not isinstance(raw, list):
             return []
@@ -284,22 +265,6 @@ class PolymarketClient:
 
     async def place_order(self, request: OrderRequest) -> OrderResponse:
         self._validate_order(request)
-        if self.paper_mode:
-            order_id = f"paper-{uuid.uuid4().hex}"
-            response = OrderResponse(
-                order_id=order_id,
-                status="OPEN",
-                market=request.market,
-                asset_id=request.asset_id,
-                side=request.side,
-                price=request.price,
-                size=request.size,
-                raw={"paper": True, "client_order_id": request.client_order_id, "post_only": request.post_only},
-            )
-            self._paper_orders[order_id] = response
-            logger.info("Paper order placed: {}", order_id)
-            return response
-
         client = self._require_clob_client()
         sdk = self._require_sdk()
         side = sdk["BUY"] if request.side is OrderSide.BUY else sdk["SELL"]
@@ -328,12 +293,6 @@ class PolymarketClient:
         return self._order_response_from_raw(request, raw)
 
     async def cancel_order(self, order_id: str) -> bool:
-        if self.paper_mode:
-            order = self._paper_orders.pop(order_id, None)
-            if order is None:
-                return False
-            logger.info("Paper order canceled: {}", order_id)
-            return True
         client = self._require_clob_client()
         if hasattr(client, "cancel_order"):
             payload_type = self._require_sdk().get("OrderPayload")
@@ -407,7 +366,7 @@ class PolymarketClient:
         if self.settings.signature_type is not None:
             kwargs["signature_type"] = self.settings.signature_type
         env_creds = self._env_api_creds(types_module)
-        if env_creds is None and self.settings.live_trading:
+        if env_creds is None:
             raise RuntimeError("POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE required for live CLOB access")
         if env_creds is not None:
             kwargs["creds"] = env_creds
@@ -485,7 +444,6 @@ class PolymarketClient:
         return f"{text[:8]}...{text[-6:]}"
 
     def _require_clob_client(self) -> Any:
-        self._ensure_live_trading_enabled()
         if self._clob_client is None:
             try:
                 self._clob_client = self._build_clob_client()
@@ -507,10 +465,6 @@ class PolymarketClient:
         if not self._sdk:
             self._require_clob_client()
         return self._sdk
-
-    def _ensure_live_trading_enabled(self) -> None:
-        if not self.paper_mode and not self.settings.live_trading:
-            raise RuntimeError("POLYMARKET_LIVE_TRADING=true required for live CLOB access")
 
     @staticmethod
     def live_sdk_available() -> bool:
@@ -734,21 +688,3 @@ class PolymarketClient:
             "timestamp": cls._float_or_none(item.get("timestamp") or item.get("createdAt")),
             "raw": item,
         }
-
-
-async def paper_smoke() -> None:
-    client = PolymarketClient(paper_mode=True)
-    await client.connect()
-    expiration = int(time.time()) + 3600
-    order = await client.place_order(
-        OrderRequest(
-            market="paper-market",
-            asset_id="paper-asset",
-            side=OrderSide.BUY,
-            price=0.5,
-            size=1,
-            expiration=expiration,
-        )
-    )
-    await client.cancel_order(order.order_id)
-    await client.close()

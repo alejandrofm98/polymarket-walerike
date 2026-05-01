@@ -7,7 +7,6 @@
       "sizing_mode": "leader_percent"
     }
   ],
-  "paper_mode": false,
   "poll_interval_seconds": 5.0,
   "solo_log": false
 }

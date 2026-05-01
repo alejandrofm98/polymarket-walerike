@@ -17,7 +17,7 @@ export function AccountView({ account, loading, onRefresh }: { account: AccountS
               Real Polymarket Account
             </h2>
             <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground/70">
-              Live wallet, positions, trades, and PnL. Paper bot data remains separate.
+              Wallet, positions, trades, and PnL from Polymarket.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading} className="border-white/10 bg-white/[0.03] hover:bg-white/8">

@@ -3,7 +3,7 @@ import { CopyOverview } from "../src/components/overview/CopyOverview";
 import type { CopyOverviewPayload } from "../src/types";
 
 const payload: CopyOverviewPayload = {
-  runtime: { running: true, paused: false, paper_mode: true },
+  runtime: { running: true, paused: false },
   summary: {
     wallet_count: 1,
     open_positions: 1,

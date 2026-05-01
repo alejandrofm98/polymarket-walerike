@@ -23,7 +23,6 @@ class CopyTradingEngine:
         broadcaster: Any | None = None,
         user_portfolio_value: Callable[[], float] | None = None,
         trade_logger: TradeLogger | None = None,
-        paper: bool = True,
     ) -> None:
         self.client = client
         self.data_client = data_client
@@ -31,7 +30,6 @@ class CopyTradingEngine:
         self.broadcaster = broadcaster
         self.user_portfolio_value = user_portfolio_value or (lambda: 0.0)
         self.trade_logger = trade_logger
-        self.paper = paper
         self.running = False
         self.paused = False
         self.ticks = 0
@@ -72,27 +70,10 @@ class CopyTradingEngine:
         await self._log_event("copy bot stopped")
         return self.status()
 
-    async def set_paper_mode(self, paper_mode: bool) -> dict[str, Any]:
-        paper_mode = bool(paper_mode)
-        if not paper_mode:
-            settings = getattr(self.client, "settings", None)
-            if settings is not None and not bool(getattr(settings, "live_trading", False)):
-                raise RuntimeError("POLYMARKET_LIVE_TRADING=true required for live mode")
-        self.paper = paper_mode
-        if self.client is not None:
-            if hasattr(self.client, "paper_mode"):
-                self.client.paper_mode = paper_mode
-            settings = getattr(self.client, "settings", None)
-            if settings is not None and hasattr(settings, "paper_mode"):
-                settings.paper_mode = paper_mode
-        await self._log_event(f"trading mode set to {'paper' if paper_mode else 'live'}")
-        return self.status()
-
     def status(self) -> dict[str, Any]:
         return {
             "running": self.running,
             "paused": self.paused,
-            "paper_mode": self.paper,
             "status": "paused" if self.paused else "running" if self.running else "stopped",
             "ticks": self.ticks,
             "orders_placed": self.orders_placed,
@@ -289,7 +270,6 @@ class CopyTradingEngine:
             "market_slug": getattr(activity, "market_slug", None),
             "timeframe": getattr(activity, "timeframe", None),
             "asset": self._trade_asset(activity) or None,
-            "paper": self.paper,
         }
 
     @staticmethod

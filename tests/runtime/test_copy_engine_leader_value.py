@@ -37,7 +37,7 @@ class FakeClient:
             side=request.side,
             price=request.price,
             size=request.size,
-            raw={"paper": True},
+            raw={},
         )
 
 
@@ -92,7 +92,6 @@ def test_copy_engine_skips_leader_percent_without_portfolio_value(tmp_path: Path
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -116,7 +115,6 @@ def test_copy_engine_allows_fixed_mode_without_portfolio_value(tmp_path: Path) -
             runtime_config_store=config_store,
             broadcaster=FakeBroadcaster(),
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()

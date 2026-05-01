@@ -4,20 +4,11 @@ export type Runtime = {
   status?: string;
   running?: boolean;
   paused?: boolean;
-  paper_mode?: boolean;
-  requested_paper_mode?: boolean;
-  live_trading?: boolean;
-  live_sdk_available?: boolean;
-  can_live_trade?: boolean;
-  live_blocked?: boolean;
-  live_block_reason?: string | null;
-  mode_label?: string;
 };
 
 export type Config = {
   copy_wallets: CopyWalletConfig[];
   poll_interval_seconds: number;
-  paper_mode: boolean;
   solo_log?: boolean;
 };
 
@@ -41,7 +32,6 @@ export type CopyTradeMetadata = {
   market_slug?: string;
   timeframe?: string;
   asset?: string;
-  paper?: boolean;
   [key: string]: unknown;
 };
 
@@ -200,7 +190,6 @@ export type AccountTrade = Record<string, any> & {
 
 export type AccountSummary = {
   available: boolean;
-  mode: "paper" | "live" | "unavailable";
   reason?: string | null;
   cash_balance?: number | null;
   allowance?: number | null;

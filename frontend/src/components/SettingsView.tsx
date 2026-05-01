@@ -1,11 +1,10 @@
 import { FormEvent, useEffect, useState } from "react";
-import { AlertTriangle, FlaskConical, Zap, Plus, Trash2, Wallet } from "lucide-react";
+import { Plus, Trash2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { getTrackedWalletBalancesKey } from "@/lib/trackedWalletBalances";
-import { cn } from "@/lib/utils";
 import { api } from "@/lib/utils2";
 import type { Config, CopyWalletConfig, Runtime, TrackedWalletBalance } from "@/types";
 
@@ -71,8 +70,6 @@ export function SettingsView({ config, savedTrackedWalletBalancesKey, runtime, s
     setConfig((current) => ({ ...current, [key]: Number(value) }));
   }
 
-  const liveRequested = config.paper_mode === false;
-  const liveBlocked = runtime.live_blocked === true || (liveRequested && runtime.live_trading === false);
   const enabledCount = copyWallets.filter((wallet) => wallet.enabled).length;
   const fixedCount = copyWallets.filter((wallet) => wallet.sizing_mode === "fixed").length;
   const trackedBalanceTotal = walletBalances.reduce((sum, wallet) => sum + Number(wallet.total || 0), 0);
@@ -204,50 +201,12 @@ export function SettingsView({ config, savedTrackedWalletBalancesKey, runtime, s
           </div>
         </div>
 
-        <div className={cn(
-            "editorial-panel p-5",
-            liveRequested
-              ? liveBlocked
-                ? "border-red-500/25 bg-red-500/10"
-                : "border-emerald-500/25 bg-emerald-500/10"
-              : "border-amber-500/25 bg-amber-500/10"
-          )}>
-            <div className="relative mb-4 flex items-center justify-between gap-4">
-              <div>
-                <div className="editorial-kicker">Execution Gate</div>
-                <Label className="mt-1.5 block text-sm font-semibold text-foreground">Trading Mode</Label>
-                <p className="mt-0.5 text-xs text-muted-foreground/60">Paper simulates orders. Live requires backend env gate.</p>
-              </div>
-              <Switch
-                checked={!liveRequested}
-                onCheckedChange={(checked) => setConfig((current) => ({ ...current, paper_mode: checked }))}
-              />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <ModeOption
-                active={!liveRequested}
-                tone="paper"
-                icon={<FlaskConical className="h-4 w-4" />}
-                title="Paper"
-                description="Orders stay simulated"
-                onClick={() => setConfig((current) => ({ ...current, paper_mode: true }))}
-              />
-              <ModeOption
-                active={liveRequested}
-                tone={liveBlocked ? "blocked" : "live"}
-                icon={liveBlocked ? <AlertTriangle className="h-4 w-4" /> : <Zap className="h-4 w-4" />}
-                title={liveBlocked ? "Live blocked" : "Live"}
-                description={liveBlocked ? runtime.live_block_reason || "Live requirements missing" : "Real orders enabled"}
-                onClick={() => setConfig((current) => ({ ...current, paper_mode: false }))}
-              />
-            </div>
-            <Button
-              className="relative mt-5 w-full bg-primary font-semibold shadow-[0_0_20px_rgba(249,115,22,0.25)] hover:shadow-[0_0_28px_rgba(249,115,22,0.35)]"
-              type="submit"
-            >
-              {liveRequested ? "Save Live Request" : "Save Paper Mode"}
-            </Button>
-          </div>
+        <Button
+          className="relative w-full bg-primary font-semibold shadow-[0_0_20px_rgba(249,115,22,0.25)] hover:shadow-[0_0_28px_rgba(249,115,22,0.35)]"
+          type="submit"
+        >
+          Save Copy Settings
+        </Button>
       </div>
     </form>
   );
@@ -260,43 +219,5 @@ function SummaryTile({ label, value, detail }: { label: string; value: string; d
       <div className="mt-2 font-mono text-lg text-foreground">{value}</div>
       <p className="mt-1 text-xs text-muted-foreground/60">{detail}</p>
     </div>
-  );
-}
-
-function ModeOption({
-  active,
-  tone,
-  icon,
-  title,
-  description,
-  onClick,
-}: {
-  active: boolean;
-  tone: "paper" | "live" | "blocked";
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  onClick: () => void;
-}) {
-  const tones = {
-    paper: "border-amber-500/25 bg-amber-500/10 hover:border-amber-500/50",
-    live: "border-emerald-500/25 bg-emerald-500/10 hover:border-emerald-500/50",
-    blocked: "border-red-500/25 bg-red-500/10 hover:border-red-500/50",
-  };
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-2xl border p-3 text-left transition-colors",
-        active ? tones[tone] : "border-white/8 bg-white/[0.03] opacity-70 hover:opacity-90"
-      )}
-    >
-      <div className="flex items-center gap-2">
-        {icon}
-        <span className="text-sm font-semibold text-foreground">{title}</span>
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground/60">{description}</p>
-    </button>
   );
 }

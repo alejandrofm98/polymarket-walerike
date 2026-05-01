@@ -37,62 +37,10 @@ def _request(**overrides: object) -> OrderRequest:
     ],
 )
 def test_validation_rejects_bad_price_size_and_gtd(overrides: dict[str, object], error: str) -> None:
-    client = PolymarketClient(paper_mode=True)
+    client = PolymarketClient()
 
     with pytest.raises(ValueError, match=error):
         client._validate_order(_request(**overrides))
-
-
-def test_paper_order_and_cancel_never_touch_live_sdk() -> None:
-    async def run() -> None:
-        client = PolymarketClient(paper_mode=True)
-
-        def fail_build() -> object:
-            raise AssertionError("paper mode must not build live SDK client")
-
-        client._build_clob_client = fail_build  # type: ignore[method-assign]
-        await client.connect()
-        order = await client.place_order(_request())
-
-        assert order.order_id.startswith("paper-")
-        assert order.raw["paper"] is True
-        assert await client.cancel_order(order.order_id) is True
-        assert await client.cancel_order(order.order_id) is False
-
-    asyncio.run(run())
-
-
-def test_paper_order_records_post_only_flag() -> None:
-    async def run() -> None:
-        client = PolymarketClient(paper_mode=True)
-
-        order = await client.place_order(_request(post_only=True))
-
-        assert order.raw["post_only"] is True
-
-    asyncio.run(run())
-
-
-def test_live_trading_guard_blocks_sdk_import_before_configured() -> None:
-    async def run() -> None:
-        settings = Settings(paper_mode=False, live_trading=False)
-        client = PolymarketClient(settings=settings, paper_mode=False)
-
-        def fail_build() -> object:
-            raise AssertionError("guard must block before SDK build")
-
-        client._build_clob_client = fail_build  # type: ignore[method-assign]
-
-        with pytest.raises(RuntimeError, match="POLYMARKET_LIVE_TRADING"):
-            await client.connect()
-
-        with pytest.raises(RuntimeError, match="POLYMARKET_LIVE_TRADING"):
-            await client.place_order(_request())
-
-        with pytest.raises(RuntimeError, match="POLYMARKET_LIVE_TRADING"):
-            await client.cancel_order("order-1")
-
-    asyncio.run(run())
 
 
 def test_live_connect_missing_sdk_reports_clear_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -104,8 +52,8 @@ def test_live_connect_missing_sdk_reports_clear_error(monkeypatch) -> None:  # t
     monkeypatch.setattr(polymarket_client_module.importlib, "import_module", missing_module)
 
     async def run() -> None:
-        settings = Settings(paper_mode=False, live_trading=True)
-        client = PolymarketClient(settings=settings, paper_mode=False)
+        settings = Settings()
+        client = PolymarketClient(settings=settings)
 
         with pytest.raises(RuntimeError, match="py-clob-client"):
             await client.connect()
@@ -115,7 +63,7 @@ def test_live_connect_missing_sdk_reports_clear_error(monkeypatch) -> None:  # t
 
 def test_websocket_payload_builders_and_urls() -> None:
     settings = Settings(api_key="key")
-    client = PolymarketClient(settings=settings, paper_mode=True)
+    client = PolymarketClient(settings=settings)
 
     assert client.build_market_subscribe_payload(["token-a", "token-b"]) == {
         "type": "market",
@@ -127,7 +75,7 @@ def test_websocket_payload_builders_and_urls() -> None:
 
 
 def test_env_api_creds_require_complete_values_when_only_api_key_set() -> None:
-    client = PolymarketClient(settings=Settings(api_key="key"), paper_mode=False)
+    client = PolymarketClient(settings=Settings(api_key="key"))
 
     class Types:
         class ApiCreds:  # pragma: no cover - must not be constructed for incomplete values
@@ -138,7 +86,7 @@ def test_env_api_creds_require_complete_values_when_only_api_key_set() -> None:
 
 
 def test_env_api_creds_require_complete_values_when_secret_or_passphrase_set() -> None:
-    client = PolymarketClient(settings=Settings(api_secret="secret"), paper_mode=False)
+    client = PolymarketClient(settings=Settings(api_secret="secret"))
 
     class Types:
         class ApiCreds:  # pragma: no cover - must not be constructed for incomplete values
@@ -150,7 +98,7 @@ def test_env_api_creds_require_complete_values_when_secret_or_passphrase_set() -
 
 def test_env_api_creds_construct_clob_creds() -> None:
     settings = Settings(api_key="key", api_secret="secret", api_passphrase="pass")
-    client = PolymarketClient(settings=settings, paper_mode=False)
+    client = PolymarketClient(settings=settings)
 
     class Types:
         @dataclass
@@ -225,8 +173,8 @@ def test_build_clob_client_prefers_v2_sdk(monkeypatch) -> None:  # type: ignore[
         raise AssertionError(name)
 
     monkeypatch.setattr(polymarket_client_module.importlib, "import_module", fake_import_module)
-    settings = Settings(paper_mode=False, live_trading=True, private_key="key", api_key="key-id", api_secret="secret", api_passphrase="pass", chain_id=137)
-    client = PolymarketClient(settings=settings, paper_mode=False)
+    settings = Settings(private_key="key", api_key="key-id", api_secret="secret", api_passphrase="pass", chain_id=137)
+    client = PolymarketClient(settings=settings)
 
     built = client._build_clob_client()
 
@@ -238,7 +186,7 @@ def test_build_clob_client_prefers_v2_sdk(monkeypatch) -> None:  # type: ignore[
 
 def test_live_signing_warnings_detect_api_key_address_mismatch(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     settings = Settings(api_key_address="0x1111111111111111111111111111111111111111")
-    client = PolymarketClient(settings=settings, paper_mode=False)
+    client = PolymarketClient(settings=settings)
     warnings = []
 
     class FakeLogger:
@@ -258,8 +206,8 @@ def test_live_signing_warnings_detect_api_key_address_mismatch(monkeypatch) -> N
 
 def test_live_positions_use_data_api_not_sdk_positions() -> None:
     async def run() -> None:
-        settings = Settings(paper_mode=False, funder="0xfunder")
-        client = PolymarketClient(settings=settings, paper_mode=False)
+        settings = Settings(funder="0xfunder")
+        client = PolymarketClient(settings=settings)
         client._clob_client = object()
 
         def fail_build() -> object:
@@ -297,15 +245,15 @@ def test_live_positions_data_api_uses_browser_json_headers(monkeypatch) -> None:
         return FakeResponse()
 
     monkeypatch.setattr(polymarket_client_module.urllib.request, "urlopen", fake_urlopen)
-    settings = Settings(paper_mode=False, polymarket_data_api_url="https://data.example")
-    client = PolymarketClient(settings=settings, paper_mode=False)
+    settings = Settings(polymarket_data_api_url="https://data.example")
+    client = PolymarketClient(settings=settings)
 
     assert client._fetch_positions("0xfunder") == [{"asset": "token-a"}]
     assert seen_headers["Accept"] == "application/json"
     assert "User-agent" in seen_headers
 
 
-def test_gamma_fetch_builds_public_urls_in_paper_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_gamma_fetch_builds_public_urls(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     async def run() -> None:
         seen_urls: list[str] = []
 
@@ -325,8 +273,8 @@ def test_gamma_fetch_builds_public_urls_in_paper_mode(monkeypatch) -> None:  # t
             return FakeResponse()
 
         monkeypatch.setattr(polymarket_client_module.urllib.request, "urlopen", fake_urlopen)
-        settings = Settings(paper_mode=True, polymarket_gamma_api_url="https://gamma.example")
-        client = PolymarketClient(settings=settings, paper_mode=True)
+        settings = Settings(polymarket_gamma_api_url="https://gamma.example")
+        client = PolymarketClient(settings=settings)
 
         assert await client.fetch_event_by_slug("https://polymarket.com/es/event/btc-updown-5m-1777069800") == {"ok": True}
         assert await client.fetch_market_by_slug("btc-updown-5m-1777069800") == {"ok": True}
@@ -362,7 +310,7 @@ def test_crypto_price_fetch_builds_polymarket_web_api_url(monkeypatch) -> None: 
             return FakeResponse()
 
         monkeypatch.setattr(polymarket_client_module.urllib.request, "urlopen", fake_urlopen)
-        client = PolymarketClient(settings=Settings(paper_mode=True), paper_mode=True)
+        client = PolymarketClient(settings=Settings())
 
         assert await client.fetch_crypto_price("btc", "2026-04-26T17:15:00Z", "fiveminute", "2026-04-26T17:20:00Z") == {"openPrice": 78030.02999197552}
         assert seen_urls == [
@@ -392,7 +340,7 @@ def test_past_results_fetch_builds_polymarket_web_api_url(monkeypatch) -> None: 
             return FakeResponse()
 
         monkeypatch.setattr(polymarket_client_module.urllib.request, "urlopen", fake_urlopen)
-        client = PolymarketClient(settings=Settings(paper_mode=True), paper_mode=True)
+        client = PolymarketClient(settings=Settings())
 
         assert await client.fetch_past_results("btc", "2026-04-26T17:00:00Z", "2026-04-26T18:00:00Z") == {"data": {"results": [{"closePrice": 77919.43}]}}
         assert seen_urls == [
@@ -402,7 +350,7 @@ def test_past_results_fetch_builds_polymarket_web_api_url(monkeypatch) -> None: 
     asyncio.run(run())
 
 
-def test_clob_book_fetches_public_urls_in_paper_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_clob_book_fetches_public_urls(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     async def run() -> None:
         seen: list[tuple[str, str | None, object]] = []
 
@@ -423,8 +371,8 @@ def test_clob_book_fetches_public_urls_in_paper_mode(monkeypatch) -> None:  # ty
             return FakeResponse()
 
         monkeypatch.setattr(polymarket_client_module.urllib.request, "urlopen", fake_urlopen)
-        settings = Settings(paper_mode=True, polymarket_host="https://clob.example")
-        client = PolymarketClient(settings=settings, paper_mode=True)
+        settings = Settings(polymarket_host="https://clob.example")
+        client = PolymarketClient(settings=settings)
 
         assert await client.fetch_order_books(["token-a"]) == [{"ok": True}]
         assert await client.fetch_order_book("token-a") == [{"ok": True}]
@@ -437,19 +385,9 @@ def test_clob_book_fetches_public_urls_in_paper_mode(monkeypatch) -> None:  # ty
     asyncio.run(run())
 
 
-def test_paper_account_reads_are_empty() -> None:
-    async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=True), paper_mode=True)
-
-        assert await client.get_account_balances() == {"available": False, "reason": "live account data requires live mode"}
-        assert await client.get_account_trades() == []
-
-    asyncio.run(run())
-
-
 def test_live_account_balances_use_clob_client_methods() -> None:
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        client = PolymarketClient(Settings())
 
         @dataclass
         class FakeBalanceAllowanceParams:
@@ -481,7 +419,7 @@ def test_live_account_balances_use_clob_client_methods() -> None:
 
 def test_live_account_balances_build_clob_client_when_disconnected() -> None:
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        client = PolymarketClient(Settings())
 
         @dataclass
         class FakeBalanceAllowanceParams:
@@ -511,7 +449,7 @@ def test_live_account_balances_build_clob_client_when_disconnected() -> None:
 
 def test_live_account_balances_include_total_from_data_client() -> None:
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True, funder="0xfunder"), paper_mode=False)
+        client = PolymarketClient(Settings(funder="0xfunder"))
 
         @dataclass
         class FakeBalanceAllowanceParams:
@@ -547,7 +485,7 @@ def test_live_account_balances_include_total_from_data_client() -> None:
 
 def test_live_account_balances_falls_back_to_imported_params(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        client = PolymarketClient(Settings())
 
         @dataclass
         class FakeBalanceAllowanceParams:
@@ -578,7 +516,7 @@ def test_live_account_balances_falls_back_to_imported_params(monkeypatch) -> Non
 
 def test_live_account_trades_normalizes_sdk_payload() -> None:
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        client = PolymarketClient(Settings())
 
         class FakeClob:
             def get_trades(self):  # type: ignore[no-untyped-def]
@@ -595,7 +533,7 @@ def test_live_account_trades_normalizes_sdk_payload() -> None:
 
 def test_live_order_passes_post_only_to_sdk_post_order() -> None:
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        client = PolymarketClient(Settings())
         calls = []
 
         @dataclass
@@ -631,7 +569,7 @@ def test_live_order_passes_post_only_to_sdk_post_order() -> None:
 
 def test_live_post_only_order_reports_old_sdk_clearly() -> None:
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        client = PolymarketClient(Settings())
 
         @dataclass
         class FakeOrderArgs:
@@ -662,7 +600,7 @@ def test_live_post_only_order_reports_old_sdk_clearly() -> None:
 
 def test_v2_live_order_uses_create_and_post_order_for_version_retry() -> None:
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        client = PolymarketClient(Settings())
         calls = []
 
         @dataclass
@@ -699,7 +637,7 @@ def test_v2_live_order_uses_create_and_post_order_for_version_retry() -> None:
 
 def test_v2_get_and_cancel_orders_use_v2_method_names() -> None:
     async def run() -> None:
-        client = PolymarketClient(Settings(paper_mode=False, live_trading=True), paper_mode=False)
+        client = PolymarketClient(Settings())
         calls = []
 
         @dataclass

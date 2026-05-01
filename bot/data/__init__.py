@@ -1,1 +1,1 @@
-"""Local data utilities for market snapshots and paper trade history."""
+"""Local data utilities for market snapshots and trade history."""

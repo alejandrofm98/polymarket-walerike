@@ -26,7 +26,6 @@ import type {
 const emptyConfig: Config = {
   copy_wallets: [],
   poll_interval_seconds: 5,
-  paper_mode: true,
   solo_log: false,
 };
 
@@ -60,7 +59,7 @@ function App() {
 
   async function refreshConfig() {
     const data = await api<Config>("/api/config");
-    const nextConfig = { ...emptyConfig, ...data, paper_mode: data.paper_mode !== false };
+    const nextConfig = { ...emptyConfig, ...data };
     setConfig(nextConfig);
     setSavedTrackedWalletBalancesKey(getTrackedWalletBalancesKey(nextConfig.copy_wallets));
   }
@@ -123,7 +122,7 @@ function App() {
     event.preventDefault();
     try {
       const saved = await api<Config>("/api/config", { method: "PUT", body: JSON.stringify(config) });
-      const nextConfig = { ...emptyConfig, ...saved, paper_mode: saved.paper_mode !== false };
+      const nextConfig = { ...emptyConfig, ...saved };
       setConfig(nextConfig);
       setSavedTrackedWalletBalancesKey(getTrackedWalletBalancesKey(nextConfig.copy_wallets));
       log("settings saved");

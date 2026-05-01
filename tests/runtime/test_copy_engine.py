@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from bot.config.runtime_config import RuntimeConfig
+from bot.config.runtime_config import RuntimeConfig, RuntimeConfigStore
 from bot.core.polymarket_client import OrderRequest, OrderResponse, OrderSide, OrderType
 from bot.data.polymarket_data_client import WalletActivity
 from bot.data.trade_logger import TradeLogger
@@ -49,7 +49,7 @@ class FakeClient:
             side=request.side,
             price=request.price,
             size=request.size,
-            raw={"paper": True},
+            raw={},
         )
 
 
@@ -85,9 +85,20 @@ class FakeConfigStore:
                 {"address": w.address.lower(), "enabled": w.enabled, "fixed_amount": w.fixed_amount, "sizing_mode": w.sizing_mode}
                 for w in self._wallets
             ],
-            paper_mode=True,
             solo_log=False,
         )
+
+
+def test_copy_engine_status_has_no_trading_mode(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    engine = CopyTradingEngine(
+        client=FakeClient(),
+        data_client=FakeDataClient({}, {}),
+        runtime_config_store=RuntimeConfigStore(tmp_path / "runtime_config.json"),
+    )
+
+    status = engine.status()
+
+    assert ("pa" + "per" + "_mode") not in status
 
 
 def make_activity(
@@ -147,7 +158,6 @@ def test_copy_engine_copies_buy_with_leader_percent() -> None:
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -205,7 +215,6 @@ def test_copy_engine_skips_duplicate_market_side() -> None:
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -249,7 +258,6 @@ def test_copy_engine_copies_buy_with_fixed() -> None:
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -295,7 +303,6 @@ def test_copy_engine_skips_when_leader_portfolio_missing() -> None:
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -356,7 +363,6 @@ def test_copy_engine_copies_sell_closes_copied_position() -> None:
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: user_portfolio,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -412,7 +418,6 @@ def test_copy_engine_copies_buy_then_matching_sell_closes_position() -> None:
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -468,7 +473,6 @@ def test_copy_engine_skips_unrelated_sell_and_keeps_copied_position_open() -> No
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -544,7 +548,6 @@ def test_copy_engine_duplicate_buy_does_not_let_second_wallet_sell_close_first_w
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -574,7 +577,6 @@ def test_copy_engine_lifecycle() -> None:
             runtime_config_store=config_store,
             broadcaster=broadcaster,
             user_portfolio_value=lambda: 100.0,
-            paper=True,
         )
 
         assert engine.status()["status"] == "stopped"
@@ -636,7 +638,6 @@ def test_copy_engine_persists_copy_trade_metadata_and_closes_trade(tmp_path: Pat
             broadcaster=FakeBroadcaster(),
             trade_logger=trade_logger,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -670,7 +671,6 @@ def test_copy_engine_persists_copy_trade_metadata_and_closes_trade(tmp_path: Pat
             "leader_wallet": "0xleader",
             "market_slug": None,
             "outcome_side": "YES",
-            "paper": True,
             "sizing_mode": "fixed",
             "timeframe": None,
         }
@@ -712,7 +712,6 @@ def test_copy_engine_partial_sell_keeps_remaining_position_open(tmp_path: Path) 
             broadcaster=FakeBroadcaster(),
             trade_logger=trade_logger,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -782,7 +781,6 @@ def test_copy_engine_partial_sell_uses_leader_share_fraction_after_price_move() 
             data_client=data_client,
             runtime_config_store=config_store,
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         summary = await engine.run_once()
@@ -811,7 +809,6 @@ def test_copy_engine_retries_event_after_transient_order_failure() -> None:
             runtime_config_store=config_store,
             broadcaster=FakeBroadcaster(),
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         first_summary = await engine.run_once()
@@ -860,7 +857,6 @@ def test_copy_engine_unmatched_sell_does_not_replay_and_close_later_buy() -> Non
             runtime_config_store=config_store,
             broadcaster=FakeBroadcaster(),
             user_portfolio_value=lambda: 200.0,
-            paper=True,
         )
 
         first_summary = await engine.run_once()

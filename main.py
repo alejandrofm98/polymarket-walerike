@@ -51,11 +51,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
     runtime_config_store = RuntimeConfigStore()
     runtime_config = runtime_config_store.load()
     validate_runtime_config(runtime_config)
-    requested_paper_mode = bool(runtime_config.paper_mode)
-    can_live_trade = not requested_paper_mode and bool(settings.live_trading)
-    effective_paper_mode = requested_paper_mode or not can_live_trade
-    settings.paper_mode = effective_paper_mode
-    client = PolymarketClient(settings=settings, paper_mode=effective_paper_mode)
+    client = PolymarketClient(settings=settings)
     trade_logger = TradeLogger(settings.database_path)
     broadcaster = WebSocketBroadcaster()
     price_feed = create_price_feed(settings)
@@ -70,14 +66,13 @@ def build_services(settings: Settings) -> dict[str, Any]:
         broadcaster=broadcaster,
         runtime_config_store=runtime_config_store,
         trade_logger=trade_logger,
-        paper=effective_paper_mode,
     )
     engine._funder_address = settings.funder or settings.external_wallet_address
     polygonscan_client = PolygonScanClient(settings.polygonscan_api_key)
     return {
         "polymarket_client": client,
         "trade_logger": trade_logger,
-        "runtime_state": BotRuntimeState(paper_mode=effective_paper_mode),
+        "runtime_state": BotRuntimeState(),
         "runtime_config_store": runtime_config_store,
         "runtime_config": runtime_config,
         "broadcaster": broadcaster,
@@ -94,16 +89,14 @@ def create_application(settings: Settings | None = None) -> Any:
     services = build_services(settings)
     feed_type = getattr(settings, "price_feed_source", "binance")
     if isinstance(logger, logging.Logger):
-        logger.info("startup paper_mode=%s live_trading=%s price_feed=%s", settings.paper_mode, settings.live_trading, feed_type)
+        logger.info("startup price_feed=%s", feed_type)
     else:
-        logger.info("startup paper_mode={} live_trading={} price_feed={}", settings.paper_mode, settings.live_trading, feed_type)
+        logger.info("startup price_feed={}", feed_type)
     return create_app(settings, services)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Polymarket Walerike dashboard")
-    parser.add_argument("--paper", action="store_true", help="force paper mode")
-    parser.add_argument("--live", action="store_true", help="enable live mode only with POLYMARKET_LIVE_TRADING=1")
     parser.add_argument("--host", default=None, help="web bind host")
     parser.add_argument("--port", type=int, default=None, help="web bind port")
     parser.add_argument("--smoke", action="store_true", help="build services and exit without starting server")
@@ -113,11 +106,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     settings = Settings.from_env()
-    if args.paper:
-        settings.paper_mode = True
-        settings.live_trading = False
-    if args.live:
-        settings.paper_mode = False
     if args.host:
         settings.web_host = args.host
     if args.port:

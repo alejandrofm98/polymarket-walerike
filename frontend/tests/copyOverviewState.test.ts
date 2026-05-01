@@ -8,7 +8,7 @@ import {
 import type { CopyOverviewPayload, WsEvent } from "../src/types";
 
 const overview: CopyOverviewPayload = {
-  runtime: { running: true, paused: false, paper_mode: true },
+  runtime: { running: true, paused: false },
   summary: {
     wallet_count: 2,
     open_positions: 3,

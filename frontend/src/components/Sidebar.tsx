@@ -1,5 +1,5 @@
 import React, { memo } from "react";
-import { Activity, AlertTriangle, FlaskConical, TrendingDown, TrendingUp, Wallet, Wifi, WifiOff, Zap } from "lucide-react";
+import { Activity, TrendingDown, TrendingUp, Wallet, Wifi, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PulsingDot } from "@/components/shared";
 import type { Runtime } from "@/types";
@@ -14,15 +14,6 @@ interface SidebarProps {
 
 export const Sidebar = memo(function Sidebar({ runtime, socketOnline, open, closed, pnl }: SidebarProps) {
   const isRunning = runtime.running && !runtime.paused;
-  const isPaper = runtime.paper_mode !== false;
-  const liveBlocked = runtime.live_blocked === true;
-  const modeLabel = liveBlocked ? "Live blocked" : isPaper ? "Paper simulation" : "Live trading";
-  const modeDetail = liveBlocked
-    ? runtime.live_block_reason || "Live requirements missing"
-    : isPaper
-      ? "Orders are simulated"
-      : "Real CLOB orders enabled";
-  const ModeIcon = liveBlocked ? AlertTriangle : isPaper ? FlaskConical : Zap;
 
   return (
     <aside className="space-y-3">
@@ -42,33 +33,6 @@ export const Sidebar = memo(function Sidebar({ runtime, socketOnline, open, clos
         </div>
 
         <div className="space-y-3">
-          {/* Mode pill */}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-muted-foreground/70">Mode</span>
-            <span className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide",
-              liveBlocked
-                ? "bg-red-500/15 text-red-300"
-                : isPaper
-                ? "bg-amber-500/15 text-amber-400"
-                : "bg-emerald-500/15 text-emerald-300"
-            )}>
-              <ModeIcon className="h-3 w-3" />
-              {modeLabel}
-            </span>
-          </div>
-
-          <div className={cn(
-            "rounded-lg border px-3 py-2 text-xs",
-            liveBlocked
-              ? "border-red-500/20 bg-red-500/10 text-red-200"
-              : isPaper
-                ? "border-amber-500/20 bg-amber-500/10 text-amber-200"
-                : "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
-          )}>
-            {modeDetail}
-          </div>
-
           {/* Socket */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground/70">WebSocket</span>

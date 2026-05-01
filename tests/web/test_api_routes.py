@@ -6,7 +6,6 @@ from bot.config.settings import Settings
 from bot.config.runtime_config import RuntimeConfigStore
 from bot.data.trade_logger import PositionRecord, TradeLogger, TradeRecord
 from bot.runtime.copy_engine import CopyTradingEngine
-import bot.web.api_routes as api_routes_module
 from bot.web.server import create_app
 
 try:
@@ -19,12 +18,11 @@ class FakeEngine:
     def __init__(self) -> None:
         self.running = False
         self.paused = False
-        self.paper = True
         self.solo_log = False
 
     def status(self) -> dict[str, object]:
         status = "paused" if self.paused else "running" if self.running else "stopped"
-        return {"running": self.running, "paused": self.paused, "paper_mode": self.paper, "solo_log": self.solo_log, "status": status}
+        return {"running": self.running, "paused": self.paused, "solo_log": self.solo_log, "status": status}
 
     async def start(self) -> dict[str, object]:
         self.running = True
@@ -43,16 +41,6 @@ class FakeEngine:
     async def set_solo_log(self, enabled: bool) -> dict[str, object]:
         self.solo_log = enabled
         return self.status()
-
-    async def set_paper_mode(self, paper_mode: bool) -> dict[str, object]:
-        self.paper = paper_mode
-        return self.status()
-
-
-class FailingModeEngine(FakeEngine):
-    async def set_paper_mode(self, paper_mode: bool) -> dict[str, object]:
-        raise RuntimeError("POLYMARKET_LIVE_TRADING=true required for live mode")
-
 
 class FailingStartEngine(FakeEngine):
     async def start(self) -> dict[str, object]:
@@ -97,7 +85,6 @@ class FakePolymarketClient:
 class FakeCopyClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.paper_mode = settings.paper_mode
         self.data_client = None
 
 
@@ -128,16 +115,47 @@ class CopyOverviewDataClient:
         return values[wallet]
 
 
+class FixedPusdClient:
+    async def pusd_balance(self, wallet: str) -> float:
+        assert wallet == "0x63ce342161250d705dc0b16df89036c8e5f9ba9a"
+        return 165431.942289
+
+
+class FixedExternalWalletDataClient:
+    async def full_portfolio(self, wallet: str) -> object:
+        assert wallet == "0x63ce342161250d705dc0b16df89036c8e5f9ba9a"
+        return FakeWalletPortfolio(cash=0.0, positions_value=15.2589, total=15.2589)
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_runtime_config_has_no_trading_mode_fields(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    app = create_app(Settings(), {"runtime_config_store": store, "trade_logger": FakeLogger()})
+
+    with TestClient(app) as client:
+        config_payload = client.get("/api/config").json()
+        status_payload = client.get("/api/status").json()
+
+    removed_mode_key = "pa" + "per" + "_mode"
+    removed_gate_key = "li" + "ve" + "_trading"
+    removed_block_key = "li" + "ve" + "_blocked"
+    assert removed_mode_key not in config_payload
+    assert removed_mode_key not in status_payload
+    assert removed_gate_key not in status_payload
+    assert removed_block_key not in status_payload
+    assert "runtime" in status_payload
+    assert removed_mode_key not in status_payload["runtime"]
+
+
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_routes_control_engine() -> None:
     engine = FakeEngine()
-    app = create_app(Settings(paper_mode=True, live_trading=False), {"bot_engine": engine, "trade_logger": FakeLogger()})
+    app = create_app(Settings(), {"bot_engine": engine, "trade_logger": FakeLogger()})
 
     with TestClient(app) as client:
         assert client.post("/api/bot/start").json()["runtime"]["status"] == "running"
         assert client.post("/api/bot/pause").json()["runtime"]["status"] == "paused"
         assert client.post("/api/bot/solo-log").json()["runtime"]["solo_log"] is True
-        assert client.get("/api/status").json()["runtime"]["paper_mode"] is True
         assert client.get("/api/trades").json() == []
         assert client.get("/api/positions").json()[0]["asset"] == "BTC"
         assert "trade_id" in client.get("/api/trades/export.csv").text
@@ -147,7 +165,7 @@ def test_api_routes_control_engine() -> None:
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_config_persists_and_validates(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = RuntimeConfigStore(tmp_path / "runtime_config.json")
-    app = create_app(Settings(paper_mode=True, live_trading=False), {"runtime_config_store": store, "trade_logger": FakeLogger()})
+    app = create_app(Settings(), {"runtime_config_store": store, "trade_logger": FakeLogger()})
 
     with TestClient(app) as client:
         response = client.put("/api/config", json={"poll_interval_seconds": 33})
@@ -158,74 +176,13 @@ def test_api_config_persists_and_validates(tmp_path) -> None:  # type: ignore[no
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
-def test_api_status_marks_requested_live_without_env_as_blocked(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
-    store.update({"paper_mode": False})
-    app = create_app(Settings(paper_mode=True, live_trading=False), {"runtime_config_store": store, "trade_logger": FakeLogger()})
-
-    with TestClient(app) as client:
-        payload = client.get("/api/status").json()
-
-    assert payload["paper_mode"] is True
-    assert payload["requested_paper_mode"] is False
-    assert payload["live_blocked"] is True
-    assert payload["live_block_reason"] == "POLYMARKET_LIVE_TRADING=true required for live mode"
-    assert payload["mode_label"] == "Live blocked"
-    assert payload["runtime"]["live_blocked"] is True
-
-
-@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
-def test_api_config_switches_mode_without_restart(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(api_routes_module.importlib.util, "find_spec", lambda name: object() if name == "py_clob_client.client" else None)
-    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
-    engine = FakeEngine()
-    app = create_app(Settings(paper_mode=True, live_trading=True), {"bot_engine": engine, "runtime_config_store": store, "trade_logger": FakeLogger()})
-
-    with TestClient(app) as client:
-        response = client.put("/api/config", json={"paper_mode": False})
-        assert response.status_code == 200
-        payload = client.get("/api/status").json()
-
-    assert engine.paper is False
-    assert payload["paper_mode"] is False
-    assert payload["requested_paper_mode"] is False
-    assert payload["live_blocked"] is False
-    assert payload["mode_label"] == "Live"
-
-
-@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
-def test_api_config_switches_copy_engine_mode_without_restart(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(api_routes_module.importlib.util, "find_spec", lambda name: object() if name == "py_clob_client.client" else None)
-    settings = Settings(paper_mode=True, live_trading=True)
-    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
-    engine = CopyTradingEngine(
-        client=FakeCopyClient(settings),
-        data_client=FakeCopyDataClient(),
-        runtime_config_store=store,
-        paper=True,
-    )
-    app = create_app(settings, {"bot_engine": engine, "runtime_config_store": store, "trade_logger": FakeLogger()})
-
-    with TestClient(app) as client:
-        response = client.put("/api/config", json={"paper_mode": False})
-        assert response.status_code == 200
-        payload = client.get("/api/status").json()
-
-    assert payload["paper_mode"] is False
-    assert payload["requested_paper_mode"] is False
-    assert payload["live_blocked"] is False
-    assert payload["mode_label"] == "Live"
-
-
-@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_bot_start_resumes_paused_copy_engine(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    settings = Settings(paper_mode=True, live_trading=False)
+    settings = Settings()
     store = RuntimeConfigStore(tmp_path / "runtime_config.json")
     engine = CopyTradingEngine(
         client=FakeCopyClient(settings),
         data_client=FakeCopyDataClient(),
         runtime_config_store=store,
-        paper=True,
     )
     app = create_app(settings, {"bot_engine": engine, "runtime_config_store": store, "trade_logger": FakeLogger()})
 
@@ -244,21 +201,8 @@ def test_api_bot_start_resumes_paused_copy_engine(tmp_path) -> None:  # type: ig
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
-def test_api_config_rolls_back_mode_when_switch_fails(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
-    app = create_app(Settings(paper_mode=True, live_trading=False), {"bot_engine": FailingModeEngine(), "runtime_config_store": store, "trade_logger": FakeLogger()})
-
-    with TestClient(app) as client:
-        response = client.put("/api/config", json={"paper_mode": False})
-        persisted = client.get("/api/config").json()
-
-    assert response.status_code == 400
-    assert persisted["paper_mode"] is True
-
-
-@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_bot_start_returns_clear_error_when_live_sdk_missing() -> None:
-    app = create_app(Settings(paper_mode=False, live_trading=True), {"bot_engine": FailingStartEngine(), "trade_logger": FakeLogger()})
+    app = create_app(Settings(), {"bot_engine": FailingStartEngine(), "trade_logger": FakeLogger()})
 
     with TestClient(app) as client:
         response = client.post("/api/bot/start")
@@ -270,9 +214,9 @@ def test_api_bot_start_returns_clear_error_when_live_sdk_missing() -> None:
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_clears_all_trade_history(tmp_path) -> None:  # type: ignore[no-untyped-def]
     trade_logger = TradeLogger(tmp_path / "trades.db", use_sqlalchemy=False)
-    trade_logger.log_trade_opened(TradeRecord(trade_id="paper", market="m1", asset="BTC", side="YES", entry_price=0.4, size=10, metadata={"paper": True}))
-    trade_logger.log_trade_opened(TradeRecord(trade_id="live", market="m1", asset="BTC", side="NO", entry_price=0.3, size=7, metadata={"paper": False}))
-    app = create_app(Settings(paper_mode=True, live_trading=False), {"trade_logger": trade_logger})
+    trade_logger.log_trade_opened(TradeRecord(trade_id="trade-1", market="m1", asset="BTC", side="YES", entry_price=0.4, size=10, metadata={}))
+    trade_logger.log_trade_opened(TradeRecord(trade_id="trade-2", market="m1", asset="BTC", side="NO", entry_price=0.3, size=7, metadata={}))
+    app = create_app(Settings(), {"trade_logger": trade_logger})
 
     with TestClient(app) as client:
         response = client.post("/api/trades/clear").json()
@@ -286,7 +230,7 @@ def test_api_clears_all_trade_history(tmp_path) -> None:  # type: ignore[no-unty
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_markets_scans_and_fetches_slug() -> None:
     app = create_app(
-        Settings(paper_mode=True, live_trading=False),
+        Settings(),
         {"market_scanner": FakeScanner(), "polymarket_client": FakePolymarketClient(), "trade_logger": FakeLogger()},
     )
 
@@ -299,7 +243,6 @@ def test_api_markets_scans_and_fetches_slug() -> None:
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_copy_overview_groups_copy_trades_and_configured_wallets(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = RuntimeConfigStore(tmp_path / "runtime_config.json")
-    store.update({"paper_mode": False})
     store.update(
         {
             "copy_wallets": [
@@ -330,7 +273,6 @@ def test_api_copy_overview_groups_copy_trades_and_configured_wallets(tmp_path) -
                 "market_slug": "btc-up",
                 "timeframe": "5m",
                 "asset": "token-yes",
-                "paper": True,
             },
         )
     )
@@ -355,13 +297,12 @@ def test_api_copy_overview_groups_copy_trades_and_configured_wallets(tmp_path) -
                 "market_slug": "eth-down",
                 "timeframe": "1h",
                 "asset": "token-no",
-                "paper": True,
             },
         )
     )
     trade_logger.log_trade_closed("copy-closed", exit_price=0.5)
     app = create_app(
-        Settings(paper_mode=True, live_trading=False),
+        Settings(),
         {
             "runtime_config_store": store,
             "trade_logger": trade_logger,
@@ -373,11 +314,8 @@ def test_api_copy_overview_groups_copy_trades_and_configured_wallets(tmp_path) -
     with TestClient(app) as client:
         payload = client.get("/api/copy-overview").json()
 
-    assert payload["runtime"]["paper_mode"] is True
-    assert payload["runtime"]["requested_paper_mode"] is False
-    assert payload["runtime"]["live_blocked"] is True
-    assert payload["runtime"]["live_block_reason"] == "POLYMARKET_LIVE_TRADING=true required for live mode"
-    assert payload["runtime"]["mode_label"] == "Live blocked"
+    assert ("pa" + "per" + "_mode") not in payload["runtime"]
+    assert ("li" + "ve" + "_blocked") not in payload["runtime"]
     assert payload["summary"] == {"wallet_count": 2, "open_positions": 1, "closed_trades": 1, "realized_pnl": -2.0}
     wallets = {wallet["address"]: wallet for wallet in payload["wallets"]}
     assert set(wallets) == {"0xleader1", "0xleader2"}
@@ -392,9 +330,6 @@ def test_api_copy_overview_groups_copy_trades_and_configured_wallets(tmp_path) -
 
 
 class FakeAccountClient:
-    def __init__(self) -> None:
-        self.paper_mode = False
-
     async def get_account_balances(self) -> dict[str, object]:
         return {"available": True, "cash_balance": 12.5, "portfolio_value": 4.5, "total_balance": 17.0, "allowances": {"0xspender": 99.0}, "raw": {}}
 
@@ -414,9 +349,9 @@ class FailingAccountClient(FakeAccountClient):
 def test_api_copy_overview_uses_authenticated_balance_for_tracked_account(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = RuntimeConfigStore(tmp_path / "runtime_config.json")
     tracked_wallet = "0xleader1"
-    store.update({"paper_mode": False, "copy_wallets": [{"address": tracked_wallet, "enabled": True, "sizing_mode": "fixed", "fixed_amount": 10}]})
+    store.update({"copy_wallets": [{"address": tracked_wallet, "enabled": True, "sizing_mode": "fixed", "fixed_amount": 10}]})
     app = create_app(
-        Settings(paper_mode=False, live_trading=True, funder=tracked_wallet),
+        Settings(funder=tracked_wallet),
         {
             "runtime_config_store": store,
             "trade_logger": FakeLogger(),
@@ -441,14 +376,43 @@ def test_api_copy_overview_uses_authenticated_balance_for_tracked_account(tmp_pa
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_copy_overview_adds_external_wallet_pusd_to_positions(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    tracked_wallet = "0x63ce342161250d705dc0b16df89036c8e5f9ba9a"
+    store.update({"copy_wallets": [{"address": tracked_wallet, "enabled": True, "sizing_mode": "leader_percent", "fixed_amount": 10}]})
+    app = create_app(
+        Settings(),
+        {
+            "runtime_config_store": store,
+            "trade_logger": FakeLogger(),
+            "data_client": FixedExternalWalletDataClient(),
+            "polygonscan_client": FixedPusdClient(),
+            "bot_engine": FakeEngine(),
+        },
+    )
+
+    with TestClient(app) as client:
+        payload = client.get("/api/copy-overview").json()
+
+    wallet = {entry["address"]: entry for entry in payload["wallets"]}[tracked_wallet]
+    assert wallet["tracked_balance"] == {
+        "address": tracked_wallet,
+        "enabled": True,
+        "cash": 0.0,
+        "positions_value": 15.2589,
+        "total": pytest.approx(165447.201189),
+        "pusd_balance": 165431.942289,
+    }
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_account_returns_live_summary() -> None:
-    app = create_app(Settings(paper_mode=False, live_trading=True), {"polymarket_client": FakeAccountClient(), "trade_logger": FakeLogger()})
+    app = create_app(Settings(), {"polymarket_client": FakeAccountClient(), "trade_logger": FakeLogger()})
 
     with TestClient(app) as client:
         payload = client.get("/api/account").json()
 
     assert payload["available"] is True
-    assert payload["mode"] == "live"
     assert payload["cash_balance"] == 12.5
     assert payload["allowances"] == {"0xspender": 99.0}
     assert payload["portfolio_value"] == 4.5
@@ -461,7 +425,7 @@ def test_api_account_returns_live_summary() -> None:
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_account_returns_partial_errors() -> None:
-    app = create_app(Settings(paper_mode=False, live_trading=True), {"polymarket_client": FailingAccountClient(), "trade_logger": FakeLogger()})
+    app = create_app(Settings(), {"polymarket_client": FailingAccountClient(), "trade_logger": FakeLogger()})
 
     with TestClient(app) as client:
         payload = client.get("/api/account").json()
@@ -480,7 +444,7 @@ class ZeroAccountClient(FakeAccountClient):
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
 def test_api_account_preserves_zero_balances() -> None:
-    app = create_app(Settings(paper_mode=False, live_trading=True), {"polymarket_client": ZeroAccountClient(), "trade_logger": FakeLogger()})
+    app = create_app(Settings(), {"polymarket_client": ZeroAccountClient(), "trade_logger": FakeLogger()})
 
     with TestClient(app) as client:
         payload = client.get("/api/account").json()

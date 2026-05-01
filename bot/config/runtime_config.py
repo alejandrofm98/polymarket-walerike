@@ -13,7 +13,6 @@ DEFAULT_RUNTIME_CONFIG_PATH = Path("data/runtime_config.json")
 class RuntimeConfig:
     copy_wallets: list[dict[str, Any]] | None = None
     poll_interval_seconds: float = 5.0
-    paper_mode: bool = True
     solo_log: bool = False
 
     def __post_init__(self) -> None:
@@ -52,7 +51,6 @@ class RuntimeConfigStore:
 def validate_runtime_config(config: RuntimeConfig) -> None:
     config.poll_interval_seconds = _float_range("poll_interval_seconds", config.poll_interval_seconds, minimum=1.0, maximum=300.0)
     config.solo_log = bool(config.solo_log)
-    config.paper_mode = bool(config.paper_mode)
     config.copy_wallets = normalize_copy_wallets(config.copy_wallets)
 
 
@@ -85,14 +83,6 @@ def normalize_copy_wallets(value: Any) -> list[dict[str, Any]]:
             "fixed_amount": fixed_amount,
         })
     return normalized
-
-
-def normalize_strategies(value: Any, strategy_groups: Any = None) -> dict[str, dict[str, Any]]:
-    return {}
-
-
-def normalize_strategy_groups(value: Any) -> dict[str, dict[str, Any]]:
-    return {}
 
 
 def _float_range(name: str, value: Any, *, minimum: float, maximum: float) -> float:
