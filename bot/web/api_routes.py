@@ -190,6 +190,17 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
                     break
         return total if found else None
 
+    def _tracked_account_addresses() -> set[str]:
+        return {
+            str(value).lower()
+            for value in (
+                getattr(settings, "funder", None),
+                getattr(settings, "external_wallet_address", None),
+                getattr(settings, "api_key_address", None),
+            )
+            if value
+        }
+
     @router.get("/health")
     async def health() -> dict[str, Any]:
         runtime_payload = engine.status() if engine is not None and hasattr(engine, "status") else asdict(runtime)
@@ -334,19 +345,59 @@ def create_api_router(settings: Any, services: dict[str, Any]) -> Any:
         data_client = services.get("data_client")
         if data_client is None or not hasattr(data_client, "full_portfolio"):
             return [{"address": w.get("address", ""), "error": "data_client unavailable"} for w in copy_wallets]
+        polygonscan_client = services.get("polygonscan_client")
+        tracked_account_addresses = _tracked_account_addresses()
+        account_client = services.get("polymarket_client") or getattr(engine, "client", None)
+        account_balances: dict[str, Any] | None = None
         results = []
         for wallet in copy_wallets:
             addr = wallet.get("address", "") if isinstance(wallet, dict) else ""
             if not addr:
                 continue
             try:
+                if str(addr).lower() in tracked_account_addresses and account_client is not None and hasattr(account_client, "get_account_balances"):
+                    if account_balances is None:
+                        raw_balances = await account_client.get_account_balances()
+                        account_balances = raw_balances if isinstance(raw_balances, dict) else {}
+                    cash_balance = account_balances.get("cash_balance") if "cash_balance" in account_balances else account_balances.get("cash")
+                    portfolio_value = account_balances.get("portfolio_value")
+                    total_balance = account_balances.get("total_balance")
+                    if any(value is not None for value in (cash_balance, portfolio_value, total_balance)):
+                        pusd = None
+                        if polygonscan_client:
+                            pusd = await polygonscan_client.pusd_balance(addr)
+                        results.append({
+                            "address": addr,
+                            "enabled": wallet.get("enabled", True) if isinstance(wallet, dict) else True,
+                            "cash": cash_balance,
+                            "positions_value": portfolio_value,
+                            "total": total_balance if total_balance is not None else _sum_first([
+                                {"value": cash_balance},
+                                {"value": portfolio_value},
+                            ], ("value",)),
+                            "pusd_balance": pusd,
+                        })
+                        continue
                 portfolio = await data_client.full_portfolio(addr)
+                cash = getattr(portfolio, "cash", None)
+                positions_value = getattr(portfolio, "positions_value", None)
+                base_total = getattr(portfolio, "total", None)
+                if base_total is None:
+                    base_total = _sum_first([
+                        {"value": cash},
+                        {"value": positions_value},
+                    ], ("value",))
+                pusd = None
+                if polygonscan_client:
+                    pusd = await polygonscan_client.pusd_balance(addr)
+                portfolio_total = (base_total or 0.0) + (pusd or 0.0)
                 results.append({
                     "address": addr,
                     "enabled": wallet.get("enabled", True) if isinstance(wallet, dict) else True,
-                    "cash": portfolio.cash,
-                    "positions_value": portfolio.positions_value,
-                    "total": portfolio.total,
+                    "cash": cash,
+                    "positions_value": positions_value,
+                    "total": portfolio_total,
+                    "pusd_balance": pusd,
                 })
             except Exception as exc:
                 results.append({"address": addr, "error": str(exc)})

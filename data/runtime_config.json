@@ -1,5 +1,12 @@
 {
-  "copy_wallets": [],
+  "copy_wallets": [
+    {
+      "address": "0x63ce342161250d705dc0b16df89036c8e5f9ba9a",
+      "enabled": true,
+      "fixed_amount": 10.0,
+      "sizing_mode": "leader_percent"
+    }
+  ],
   "paper_mode": false,
   "poll_interval_seconds": 5.0,
   "solo_log": false

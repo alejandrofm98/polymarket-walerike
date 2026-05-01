@@ -36,8 +36,8 @@ export function CopyWalletPanel({ wallet }: CopyWalletPanelProps) {
         </div>
 
         <div className="grid gap-3 md:grid-cols-4">
-          <InfoTile label="Leader Balance" value={formatMoney(balance?.total)} />
-          <InfoTile label="Leader Cash" value={formatMoney(balance?.cash)} />
+          <InfoTile label="Portfolio Total" value={formatMoney(balance?.total)} />
+          <InfoTile label="PUSD" value={formatPusd(balance?.pusd_balance)} />
           <InfoTile label="Open Positions" value={String(wallet.open_positions.length)} />
           <InfoTile label="Closed PnL" value={signedMoney(realizedPnl)} valueClass={realizedPnl >= 0 ? "text-emerald-400" : "text-red-400"} />
         </div>
@@ -86,6 +86,11 @@ function InfoTile({ label, value, valueClass }: { label: string; value: string; 
 }
 
 function formatMoney(value?: number) {
+  if (value == null) return "-";
+  return `$${formatNumber(value, 2) || "0.00"}`;
+}
+
+function formatPusd(value?: number | null) {
   if (value == null) return "-";
   return `$${formatNumber(value, 2) || "0.00"}`;
 }

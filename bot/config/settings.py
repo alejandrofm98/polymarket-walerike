@@ -83,6 +83,7 @@ class Settings:
     price_feed_source: str = DEFAULT_PRICE_FEED_SOURCE
     auto_start_bot: bool = False
     bot_start_timeout_seconds: float = 20.0
+    polygonscan_api_key: str | None = None
 
     @classmethod
     def from_env(cls, load_dotenv: bool = True) -> "Settings":
@@ -120,4 +121,5 @@ class Settings:
             price_feed_source=os.getenv("PRICE_FEED_SOURCE", DEFAULT_PRICE_FEED_SOURCE),
             auto_start_bot=_env_bool("AUTO_START_BOT", False),
             bot_start_timeout_seconds=float(os.getenv("BOT_START_TIMEOUT_SECONDS", "20")),
+            polygonscan_api_key=os.getenv("POLYGONSCAN_API_KEY") or None,
         )

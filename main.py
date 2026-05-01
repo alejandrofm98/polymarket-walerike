@@ -14,6 +14,7 @@ from bot.core.binance_feed import BinanceTickerFeed
 from bot.core.polymarket_client import PolymarketClient
 from bot.core.polymarket_rtds_feed import PolymarketRTDSFeed
 from bot.data.polymarket_data_client import PolymarketDataClient
+from bot.data.polygonscan_client import PolygonScanClient
 from bot.data.trade_logger import TradeLogger
 from bot.runtime.copy_engine import CopyTradingEngine
 from bot.web.api_routes import BotRuntimeState
@@ -72,6 +73,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
         paper=effective_paper_mode,
     )
     engine._funder_address = settings.funder or settings.external_wallet_address
+    polygonscan_client = PolygonScanClient(settings.polygonscan_api_key)
     return {
         "polymarket_client": client,
         "trade_logger": trade_logger,
@@ -81,6 +83,7 @@ def build_services(settings: Settings) -> dict[str, Any]:
         "broadcaster": broadcaster,
         "price_feed": price_feed,
         "data_client": data_client,
+        "polygonscan_client": polygonscan_client,
         "bot_engine": engine,
     }
 

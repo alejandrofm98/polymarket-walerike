@@ -381,7 +381,7 @@ def test_api_copy_overview_groups_copy_trades_and_configured_wallets(tmp_path) -
     assert payload["summary"] == {"wallet_count": 2, "open_positions": 1, "closed_trades": 1, "realized_pnl": -2.0}
     wallets = {wallet["address"]: wallet for wallet in payload["wallets"]}
     assert set(wallets) == {"0xleader1", "0xleader2"}
-    assert wallets["0xleader1"]["tracked_balance"] == {"address": "0xleader1", "enabled": True, "cash": 1.0, "positions_value": 4.0, "total": 5.0}
+    assert wallets["0xleader1"]["tracked_balance"] == {"address": "0xleader1", "enabled": True, "cash": 1.0, "positions_value": 4.0, "total": 5.0, "pusd_balance": None}
     assert wallets["0xleader1"]["stats"] == {"realized_pnl": -2.0, "closed_count": 1}
     assert len(wallets["0xleader1"]["open_positions"]) == 1
     assert wallets["0xleader1"]["open_positions"][0]["trade_id"] == "copy-open"
@@ -408,6 +408,36 @@ class FakeAccountClient:
 class FailingAccountClient(FakeAccountClient):
     async def get_account_balances(self) -> dict[str, object]:
         raise RuntimeError("balance failed")
+
+
+@pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")
+def test_api_copy_overview_uses_authenticated_balance_for_tracked_account(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = RuntimeConfigStore(tmp_path / "runtime_config.json")
+    tracked_wallet = "0xleader1"
+    store.update({"paper_mode": False, "copy_wallets": [{"address": tracked_wallet, "enabled": True, "sizing_mode": "fixed", "fixed_amount": 10}]})
+    app = create_app(
+        Settings(paper_mode=False, live_trading=True, funder=tracked_wallet),
+        {
+            "runtime_config_store": store,
+            "trade_logger": FakeLogger(),
+            "data_client": CopyOverviewDataClient(),
+            "polymarket_client": FakeAccountClient(),
+            "bot_engine": FakeEngine(),
+        },
+    )
+
+    with TestClient(app) as client:
+        payload = client.get("/api/copy-overview").json()
+
+    wallet = {entry["address"]: entry for entry in payload["wallets"]}[tracked_wallet]
+    assert wallet["tracked_balance"] == {
+        "address": tracked_wallet,
+        "enabled": True,
+        "cash": 12.5,
+        "positions_value": 4.5,
+        "total": 17.0,
+        "pusd_balance": None,
+    }
 
 
 @pytest.mark.skipif(TestClient is None, reason="FastAPI test client unavailable")

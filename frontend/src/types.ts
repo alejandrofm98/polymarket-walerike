@@ -84,6 +84,7 @@ export type TrackedWalletBalance = {
   cash?: number;
   positions_value?: number;
   total?: number;
+  pusd_balance?: number | null;
   error?: string;
 };
 
