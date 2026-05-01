@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { AlertTriangle, RefreshCcw, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared";
+import { formatLedgerRow } from "@/lib/accountLedgerFormat";
 import { cn } from "@/lib/utils";
 import type { AccountPosition, AccountSummary, AccountTrade } from "@/types";
 
@@ -94,54 +95,38 @@ function Section({ title, count, children }: { title: string; count: number; chi
 function PositionsTable({ positions }: { positions: AccountPosition[] }) {
   if (!positions.length) return <EmptyState>No real positions</EmptyState>;
   return (
-    <div className="editorial-table">
-      <table>
-        <thead>
-          <tr>{["Market", "Asset", "Side", "Size", "Avg", "Value", "PnL"].map((h) => <th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}</tr>
-        </thead>
-        <tbody>
-          {positions.map((position, index) => {
-            const value = num(position.currentValue ?? position.current_value ?? position.value);
-            const pnl = num(position.cashPnl ?? position.unrealized_pnl ?? position.pnl);
-            return (
-              <tr key={`${position.market}-${index}`} className="hover:bg-white/[0.025]">
-                <td className="max-w-[220px] truncate px-3 py-2 font-mono text-xs text-muted-foreground/70">{String(position.market || "-")}</td>
-                <td className="px-3 py-2 font-semibold">{position.asset || "-"}</td>
-                <td className="px-3 py-2 font-semibold">{position.side || "-"}</td>
-                <td className="px-3 py-2 font-mono text-xs">{num(position.size)?.toFixed(2) ?? "-"}</td>
-                <td className="px-3 py-2 font-mono text-xs">{num(position.avg_price ?? position.avgPrice)?.toFixed(3) ?? "-"}</td>
-                <td className="px-3 py-2 font-mono text-xs">{money(value)}</td>
-                <td className={cn("px-3 py-2 font-mono text-xs font-bold", pnl != null && (pnl >= 0 ? "text-emerald-400" : "text-red-400"))}>{money(pnl, true)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <LedgerTable items={positions} kind="position" />
   );
 }
 
 function TradesTable({ trades }: { trades: AccountTrade[] }) {
   if (!trades.length) return <EmptyState>No real trades</EmptyState>;
+  return <LedgerTable items={trades} kind="trade" />;
+}
+
+function LedgerTable({ items, kind }: { items: Array<AccountPosition | AccountTrade>; kind: "position" | "trade" }) {
   return (
     <div className="editorial-table">
       <table>
         <thead>
-          <tr>{["ID", "Market", "Side", "Size", "Price", "Fee", "Time", "PnL"].map((h) => <th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}</tr>
+          <tr>{["Actividad", "Mercado", "Shares", "Valor", "Fecha"].map((h) => <th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>)}</tr>
         </thead>
         <tbody>
-          {trades.map((trade, index) => {
-            const pnl = num(trade.realized_pnl ?? trade.pnl);
+          {items.map((item, index) => {
+            const row = formatLedgerRow(item, kind);
             return (
-              <tr key={`${trade.id}-${index}`} className="hover:bg-white/[0.025]">
-                <td className="max-w-[120px] truncate px-3 py-2 font-mono text-xs text-muted-foreground/70">{trade.id || "-"}</td>
-                <td className="max-w-[220px] truncate px-3 py-2 font-mono text-xs text-muted-foreground/70">{trade.market || "-"}</td>
-                <td className="px-3 py-2 font-semibold">{trade.side || "-"}</td>
-                <td className="px-3 py-2 font-mono text-xs">{num(trade.size)?.toFixed(2) ?? "-"}</td>
-                <td className="px-3 py-2 font-mono text-xs">{num(trade.price)?.toFixed(3) ?? "-"}</td>
-                <td className="px-3 py-2 font-mono text-xs">{money(num(trade.fee))}</td>
-                <td className="px-3 py-2 text-xs text-muted-foreground/70">{date(trade.timestamp)}</td>
-                <td className={cn("px-3 py-2 font-mono text-xs font-bold", pnl != null && (pnl >= 0 ? "text-emerald-400" : "text-red-400"))}>{money(pnl, true)}</td>
+              <tr key={`${item.id || item.market || row.title}-${index}`} className="hover:bg-white/[0.025]">
+                <td className="px-3 py-3 font-semibold text-foreground">{row.activity}</td>
+                <td className="max-w-[520px] px-3 py-3">
+                  <div className="truncate font-semibold text-foreground" title={row.title}>{row.title}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground/70">
+                    <span className={cn("rounded-full px-2 py-0.5 font-bold", row.tone === "up" && "bg-emerald-400/15 text-emerald-300", row.tone === "down" && "bg-red-400/15 text-red-300", row.tone === "neutral" && "bg-white/10 text-muted-foreground")}>{row.badge}</span>
+                    <span>{row.shares} shares</span>
+                  </div>
+                </td>
+                <td className="px-3 py-3 font-mono text-xs text-foreground">{row.shares}</td>
+                <td className={cn("px-3 py-3 font-mono text-xs font-bold", row.value.startsWith("+") && "text-emerald-400", row.value.startsWith("-") && row.value !== "-" && "text-red-400")}>{row.value}</td>
+                <td className="px-3 py-3 text-xs text-muted-foreground/70">{row.time}</td>
               </tr>
             );
           })}
@@ -168,11 +153,4 @@ function tone(value: unknown): "good" | "bad" | "neutral" {
   const parsed = num(value);
   if (parsed == null || parsed === 0) return "neutral";
   return parsed > 0 ? "good" : "bad";
-}
-
-function date(value: unknown): string {
-  const parsed = num(value);
-  if (parsed == null) return "-";
-  const millis = parsed > 10_000_000_000 ? parsed : parsed * 1000;
-  return new Date(millis).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }

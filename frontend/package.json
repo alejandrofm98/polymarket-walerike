@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "check:accountledger": "node --experimental-strip-types tests/accountLedgerFormat.test.ts",
     "check:copyoverviewstate": "node --experimental-strip-types tests/copyOverviewState.test.ts",
     "check:view-types": "tsc --noEmit --pretty false --strict --target ES2020 --module ESNext --moduleResolution Bundler --skipLibCheck tests/viewTypes.test.ts",
     "build": "tsc -b && vite build",
